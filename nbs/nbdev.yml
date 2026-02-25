@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "cjm-media-plugin-ffmpeg"
+  site-url: "https://cj-mills.github.io/cjm-media-plugin-ffmpeg"
+  description: "FFmpeg-based media processing plugin for the cjm-plugin-system that provides audio extraction, segmentation, format conversion, and segment extraction."
+  repo-branch: main
+  repo-url: "https://github.com/cj-mills/cjm-media-plugin-ffmpeg"
