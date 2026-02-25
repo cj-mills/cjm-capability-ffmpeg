@@ -8,3 +8,188 @@
 ``` bash
 pip install cjm_media_plugin_ffmpeg
 ```
+
+## Project Structure
+
+    nbs/
+    ├── meta.ipynb   # Metadata introspection for the FFmpeg media processing plugin used by `cjm-ctl` to generate the registration manifest.
+    └── plugin.ipynb # FFmpeg-based media processing plugin implementing the `MediaProcessingPlugin` interface.
+
+Total: 2 notebooks
+
+## Module Dependencies
+
+``` mermaid
+graph LR
+    meta[meta<br/>Metadata]
+    plugin[plugin<br/>FFmpeg Processing Plugin]
+
+    plugin --> meta
+```
+
+*1 cross-module dependencies detected*
+
+## CLI Reference
+
+No CLI commands found in this project.
+
+## Module Overview
+
+Detailed documentation for each module in the project:
+
+### Metadata (`meta.ipynb`)
+
+> Metadata introspection for the FFmpeg media processing plugin used by
+> `cjm-ctl` to generate the registration manifest.
+
+#### Import
+
+``` python
+from cjm_media_plugin_ffmpeg.meta import (
+    get_plugin_metadata
+)
+```
+
+#### Functions
+
+``` python
+def get_plugin_metadata() -> Dict[str, Any]:  # Plugin metadata for manifest generation
+    """Return metadata required to register this plugin with the PluginManager."""
+    cjm_data_dir = os.environ.get("CJM_DATA_DIR")
+    plugin_name = "cjm-media-plugin-ffmpeg"
+
+    if cjm_data_dir
+    "Return metadata required to register this plugin with the PluginManager."
+```
+
+### FFmpeg Processing Plugin (`plugin.ipynb`)
+
+> FFmpeg-based media processing plugin implementing the
+> `MediaProcessingPlugin` interface.
+
+#### Import
+
+``` python
+from cjm_media_plugin_ffmpeg.plugin import (
+    FFmpegPluginConfig,
+    FFmpegProcessingPlugin
+)
+```
+
+#### Classes
+
+``` python
+@dataclass
+class FFmpegPluginConfig:
+    "Configuration for the FFmpeg processing plugin."
+    
+    output_dir: Optional[str] = field(...)
+    default_audio_format: str = field(...)
+    default_audio_bitrate: str = field(...)
+    prefer_stream_copy: bool = field(...)
+```
+
+``` python
+class FFmpegProcessingPlugin:
+    def __init__(self):
+        """Initialize the FFmpeg processing plugin."""
+        self.logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
+        self.config: Optional[FFmpegPluginConfig] = None
+    "FFmpeg-based media processing plugin."
+    
+    def __init__(self):
+            """Initialize the FFmpeg processing plugin."""
+            self.logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
+            self.config: Optional[FFmpegPluginConfig] = None
+        "Initialize the FFmpeg processing plugin."
+    
+    def name(self) -> str:  # Plugin identifier
+            return "ffmpeg"
+    
+        @property
+        def version(self) -> str:  # Plugin version
+    
+    def version(self) -> str:  # Plugin version
+            return "1.0.0"
+    
+        @property
+        def supported_media_types(self) -> List[str]:  # Supported input types
+    
+    def supported_media_types(self) -> List[str]:  # Supported input types
+            return ["audio", "video"]
+    
+        def initialize(self, config: Optional[Any] = None) -> None
+    
+    def initialize(self, config: Optional[Any] = None) -> None:
+            """Initialize plugin with configuration."""
+            self.config = dict_to_config(FFmpegPluginConfig, config or {})
+            meta = get_plugin_metadata()
+            db_path = meta["db_path"]
+            self._data_dir = os.path.dirname(db_path)
+            self.storage = MediaProcessingStorage(db_path)
+            self.logger.info(f"Initialized FFmpeg plugin (format={self.config.default_audio_format})")
+    
+        def get_config_schema(self) -> Dict[str, Any]:  # JSON Schema for UI form generation
+        "Initialize plugin with configuration."
+    
+    def get_config_schema(self) -> Dict[str, Any]:  # JSON Schema for UI form generation
+            """Return the JSON Schema for plugin configuration."""
+            return dataclass_to_jsonschema(FFmpegPluginConfig)
+    
+        def get_current_config(self) -> Dict[str, Any]:  # Current config as dict
+        "Return the JSON Schema for plugin configuration."
+    
+    def get_current_config(self) -> Dict[str, Any]:  # Current config as dict
+            """Return the current configuration as a dictionary."""
+            return config_to_dict(self.config) if self.config else {}
+    
+        def is_available(self) -> bool:  # Whether ffmpeg is installed
+        "Return the current configuration as a dictionary."
+    
+    def is_available(self) -> bool:  # Whether ffmpeg is installed
+            """Check if ffmpeg is available on this system."""
+            return FFMPEG_AVAILABLE
+    
+        def cleanup(self) -> None
+        "Check if ffmpeg is available on this system."
+    
+    def cleanup(self) -> None:
+            """Clean up plugin resources."""
+            self.logger.info("FFmpeg plugin cleaned up")
+    
+        # ------------------------------------------------------------------
+        # Action dispatch
+        # ------------------------------------------------------------------
+    
+        def execute(self,
+                    action: str = "get_info",  # Action to perform
+                    **kwargs
+                   ) -> Dict[str, Any]:  # Action result
+        "Clean up plugin resources."
+    
+    def execute(self,
+                    action: str = "get_info",  # Action to perform
+                    **kwargs
+                   ) -> Dict[str, Any]:  # Action result
+        "Dispatch to the appropriate action handler."
+    
+    def get_info(self,
+                     file_path: Union[str, Path],  # Path to media file
+                    ) -> MediaMetadata:  # Probed metadata
+        "Get metadata for a media file via ffprobe."
+    
+    def convert(self,
+                    input_path: Union[str, Path],  # Source file path
+                    output_format: str,  # Target format (e.g. 'mp3', 'wav')
+                    **kwargs
+                   ) -> str:  # Output file path
+        "Convert media to a different format."
+    
+    def extract_segment(self,
+                            input_path: Union[str, Path],  # Source audio file
+                            start: float,  # Start time in seconds
+                            end: float,  # End time in seconds
+                            output_path: Optional[str] = None,  # Custom output path
+                           ) -> str:  # Output file path
+        "Extract a temporal segment from a media file."
+```

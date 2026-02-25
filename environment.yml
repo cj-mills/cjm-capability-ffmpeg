@@ -1,0 +1,27 @@
+name: cjm-media-plugin-ffmpeg
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - ffmpeg
+  - pip
+  - pip:
+    # Core Infrastructure
+    - cjm-plugin-system
+
+    # Tier 2 Interface
+    - cjm-media-plugin-system
+
+    # FFmpeg Operations
+    - cjm-ffmpeg-utils
+
+    # Utilities
+    - fastcore
+    - pydantic
+
+    # Worker dependencies
+    - fastapi
+    - uvicorn
+    - psutil
+    - httpx

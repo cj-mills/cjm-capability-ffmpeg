@@ -9,7 +9,7 @@ plugins:
     env_file: "./environment.yml"
     
     # The Plugin Package
-    package: "."
+    package: "/mnt/SN850X_8TB_EXT4/Projects/GitHub/cj-mills/cjm-media-plugin-ffmpeg/"
     
     # Interface Libraries
     interface_libs:
