@@ -435,12 +435,12 @@ def test_segment_audio():
                   f" -> {os.path.basename(seg['output_path'])} ({info.duration:.2f}s)")
 
         # Verify all jobs stored with correct batch_key
-        jobs = plugin.storage.list_jobs(limit=10)
-        segment_jobs = [j for j in jobs if j.action == "segment_audio"]
-        assert len(segment_jobs) == 3
-        batch_keys = {j.parameters["batch_key"] for j in segment_jobs}
-        assert len(batch_keys) == 1, f"Expected 1 batch_key, got {len(batch_keys)}"
-        assert batch_keys.pop() == result["batch_key"]
+        batch_key = result["batch_key"]
+        jobs = plugin.storage.list_jobs(limit=100)
+        segment_jobs = [j for j in jobs if j.action == "segment_audio"
+                        and j.parameters.get("batch_key") == batch_key]
+        assert len(segment_jobs) == 3, \
+            f"Expected 3 jobs for batch_key, got {len(segment_jobs)}"
         print(f"  All jobs share batch_key: OK")
 
         plugin.cleanup()

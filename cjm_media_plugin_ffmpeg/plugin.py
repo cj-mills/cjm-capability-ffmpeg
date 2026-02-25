@@ -144,10 +144,12 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                    output_path: str,  # Output file path
                    parameters: Optional[Dict[str, Any]] = None,  # Action parameters
                    metadata: Optional[Dict[str, Any]] = None,  # Additional metadata
+                   input_hash: Optional[str] = None,  # Pre-computed input hash (avoids re-hashing)
                   ) -> str:  # Generated job_id
         """Hash input/output files and store a processing job record."""
         job_id = str(uuid.uuid4())
-        input_hash = hash_file(input_path)
+        if input_hash is None:
+            input_hash = hash_file(input_path)
         output_hash = hash_file(output_path)
         self.storage.save(
             job_id=job_id, action=action,
@@ -452,7 +454,9 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         batch_key = str(uuid.uuid4())
         total = len(boundaries)
 
-        self.report_progress(0.0, f"Segmenting into {total} segments...")
+        # Hash input once (avoids re-hashing per segment)
+        self.report_progress(0.0, "Hashing input file...")
+        cached_input_hash = hash_file(input_path)
 
         segments = []
         for i, boundary in enumerate(boundaries):
@@ -474,7 +478,8 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                 action="segment_audio", input_path=input_path, output_path=output_path,
                 parameters={"start": start, "end": end, "index": i, "batch_key": batch_key},
                 metadata={"source_audio": input_path, "segment_count": total,
-                           "filename_template": filename_template}
+                           "filename_template": filename_template},
+                input_hash=cached_input_hash,
             )
 
             segments.append({
