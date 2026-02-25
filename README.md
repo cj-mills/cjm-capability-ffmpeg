@@ -158,13 +158,13 @@ class FFmpegProcessingPlugin:
             self.logger.info("FFmpeg plugin cleaned up")
     
         # ------------------------------------------------------------------
-        # Action dispatch
+        # Helpers
         # ------------------------------------------------------------------
     
-        def execute(self,
-                    action: str = "get_info",  # Action to perform
-                    **kwargs
-                   ) -> Dict[str, Any]:  # Action result
+        def _get_output_dir(self,
+                            output_dir: Optional[str] = None,  # Explicit output dir override
+                            subdirectory: Optional[str] = None,  # Subdirectory within output dir
+                           ) -> str:  # Resolved output directory path
         "Clean up plugin resources."
     
     def execute(self,

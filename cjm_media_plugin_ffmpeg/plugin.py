@@ -6,9 +6,11 @@
 __all__ = ['FFmpegPluginConfig', 'FFmpegProcessingPlugin']
 
 # %% ../nbs/plugin.ipynb #306abe01
+import json
 import logging
 import os
 import shutil
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -122,6 +124,40 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         self.logger.info("FFmpeg plugin cleaned up")
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _get_output_dir(self,
+                        output_dir: Optional[str] = None,  # Explicit output dir override
+                        subdirectory: Optional[str] = None,  # Subdirectory within output dir
+                       ) -> str:  # Resolved output directory path
+        """Resolve the output directory, creating it if needed."""
+        base = output_dir or self.config.output_dir or self._data_dir
+        if subdirectory:
+            base = os.path.join(base, subdirectory)
+        os.makedirs(base, exist_ok=True)
+        return base
+
+    def _store_job(self,
+                   action: str,  # Action name
+                   input_path: str,  # Source file path
+                   output_path: str,  # Output file path
+                   parameters: Optional[Dict[str, Any]] = None,  # Action parameters
+                   metadata: Optional[Dict[str, Any]] = None,  # Additional metadata
+                  ) -> str:  # Generated job_id
+        """Hash input/output files and store a processing job record."""
+        job_id = str(uuid.uuid4())
+        input_hash = hash_file(input_path)
+        output_hash = hash_file(output_path)
+        self.storage.save(
+            job_id=job_id, action=action,
+            input_path=input_path, input_hash=input_hash,
+            output_path=output_path, output_hash=output_hash,
+            parameters=parameters, metadata=metadata
+        )
+        return job_id
+
+    # ------------------------------------------------------------------
     # Action dispatch
     # ------------------------------------------------------------------
 
@@ -151,14 +187,58 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             raise ValueError(f"Unknown action: {action}")
 
     # ------------------------------------------------------------------
-    # Required abstract methods (stubs for Phase 2)
+    # Core actions
     # ------------------------------------------------------------------
 
     def get_info(self,
                  file_path: Union[str, Path],  # Path to media file
                 ) -> MediaMetadata:  # Probed metadata
         """Get metadata for a media file via ffprobe."""
-        raise NotImplementedError("get_info will be implemented in Phase 2")
+        file_path = str(file_path)
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        cmd = [
+            'ffprobe', '-v', 'quiet',
+            '-show_format', '-show_streams', '-of', 'json',
+            file_path
+        ]
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        probe_data = json.loads(result.stdout)
+
+        format_info = probe_data.get('format', {})
+        duration = float(format_info.get('duration', 0))
+        size_bytes = int(format_info.get('size', 0))
+        container_format = format_info.get('format_name', '')
+
+        video_streams = []
+        audio_streams = []
+        for stream in probe_data.get('streams', []):
+            codec_type = stream.get('codec_type', '')
+            if codec_type == 'video':
+                video_streams.append({
+                    'codec': stream.get('codec_name'),
+                    'width': stream.get('width'),
+                    'height': stream.get('height'),
+                    'fps': stream.get('r_frame_rate'),
+                })
+            elif codec_type == 'audio':
+                stream_duration = float(stream.get('duration', duration))
+                audio_streams.append({
+                    'codec': stream.get('codec_name'),
+                    'sample_rate': int(stream.get('sample_rate', 0)),
+                    'channels': int(stream.get('channels', 0)),
+                    'duration': stream_duration,
+                })
+
+        return MediaMetadata(
+            path=file_path,
+            duration=duration,
+            format=container_format,
+            size_bytes=size_bytes,
+            video_streams=video_streams,
+            audio_streams=audio_streams,
+        )
 
     def convert(self,
                 input_path: Union[str, Path],  # Source file path
@@ -166,7 +246,46 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                 **kwargs
                ) -> str:  # Output file path
         """Convert media to a different format."""
-        raise NotImplementedError("convert will be implemented in Phase 2")
+        input_path = str(input_path)
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"File not found: {input_path}")
+
+        bitrate = kwargs.get('bitrate', self.config.default_audio_bitrate)
+        sample_rate = kwargs.get('sample_rate')
+        channels = kwargs.get('channels')
+
+        stem = Path(input_path).stem
+        out_dir = self._get_output_dir(subdirectory="converted")
+        output_path = os.path.join(out_dir, f"{stem}.{output_format}")
+
+        total_duration = get_media_duration(Path(input_path))
+        codec = get_audio_codec(output_format)
+
+        cmd = ['ffmpeg', '-i', input_path, '-vn']
+        cmd.extend(['-acodec', codec])
+        if bitrate:
+            cmd.extend(['-b:a', bitrate])
+        if sample_rate:
+            cmd.extend(['-ar', str(sample_rate)])
+        if channels:
+            cmd.extend(['-ac', str(channels)])
+        cmd.extend(['-progress', 'pipe:2', '-y', output_path])
+
+        self.report_progress(0.0, f"Converting to {output_format}...")
+        run_ffmpeg_with_progress(
+            cmd=cmd, total_duration=total_duration,
+            description=f"Converting to {output_format}"
+        )
+
+        job_id = self._store_job(
+            action="convert", input_path=input_path, output_path=output_path,
+            parameters={"output_format": output_format, "bitrate": bitrate,
+                         "sample_rate": sample_rate, "channels": channels},
+            metadata={"duration": total_duration}
+        )
+        self.report_progress(1.0, "Complete")
+        self.logger.info(f"Converted {input_path} -> {output_path} (job={job_id})")
+        return output_path
 
     def extract_segment(self,
                         input_path: Union[str, Path],  # Source audio file
@@ -175,7 +294,35 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                         output_path: Optional[str] = None,  # Custom output path
                        ) -> str:  # Output file path
         """Extract a temporal segment from a media file."""
-        raise NotImplementedError("extract_segment will be implemented in Phase 2")
+        input_path = str(input_path)
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"File not found: {input_path}")
+
+        duration = end - start
+        if duration <= 0:
+            raise ValueError(f"end ({end}) must be greater than start ({start})")
+
+        if output_path is None:
+            ext = Path(input_path).suffix
+            stem = Path(input_path).stem
+            out_dir = self._get_output_dir(subdirectory="segments")
+            output_path = os.path.join(out_dir, f"{stem}_{start:.2f}_{end:.2f}{ext}")
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        extract_audio_segment(
+            input_path=Path(input_path),
+            output_path=Path(output_path),
+            start_time=str(start),
+            duration=str(duration),
+        )
+
+        job_id = self._store_job(
+            action="extract_segment", input_path=input_path, output_path=output_path,
+            parameters={"start": start, "end": end, "duration": duration},
+        )
+        self.logger.info(f"Extracted segment [{start:.2f}-{end:.2f}] -> {output_path} (job={job_id})")
+        return output_path
 
     # ------------------------------------------------------------------
     # Custom actions (stubs for Phase 3)
