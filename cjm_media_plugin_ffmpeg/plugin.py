@@ -157,6 +157,24 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         )
         return job_id
 
+    def _detect_audio_codec(self,
+                            file_path: str,  # Path to media file
+                           ) -> Optional[str]:  # Audio codec name or None
+        """Detect the audio codec in a media file via ffprobe."""
+        cmd = [
+            'ffprobe', '-v', 'quiet',
+            '-select_streams', 'a:0',
+            '-show_entries', 'stream=codec_name',
+            '-of', 'csv=p=0',
+            file_path
+        ]
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            codec = result.stdout.strip()
+            return codec if codec else None
+        except subprocess.CalledProcessError:
+            return None
+
     # ------------------------------------------------------------------
     # Action dispatch
     # ------------------------------------------------------------------
@@ -325,13 +343,159 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         return output_path
 
     # ------------------------------------------------------------------
-    # Custom actions (stubs for Phase 3)
+    # Custom actions
     # ------------------------------------------------------------------
 
-    def _extract_audio(self, **kwargs) -> Dict[str, Any]:
+    def _extract_audio(self,
+                       input_path: str,  # Path to video file
+                       output_format: Optional[str] = None,  # Audio format (default: from codec detection)
+                       output_dir: Optional[str] = None,  # Output directory override
+                      ) -> Dict[str, Any]:  # Extraction result with output_path, job_id, duration, codec
         """Extract audio stream from a video file."""
-        raise NotImplementedError("_extract_audio will be implemented in Phase 3")
+        input_path = str(input_path)
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"File not found: {input_path}")
 
-    def _segment_audio(self, **kwargs) -> Dict[str, Any]:
+        self.report_progress(0.0, "Probing video file...")
+
+        # Detect audio codec
+        codec = self._detect_audio_codec(input_path)
+        if not codec:
+            raise ValueError(f"No audio stream found in: {input_path}")
+
+        # Determine output format and whether to stream copy
+        stream_copy = self.config.prefer_stream_copy
+        if output_format is None:
+            # Map codec to file extension for stream copy
+            codec_ext_map = {
+                'aac': 'm4a', 'mp3': 'mp3', 'vorbis': 'ogg', 'opus': 'ogg',
+                'flac': 'flac', 'pcm_s16le': 'wav', 'pcm_s24le': 'wav',
+            }
+            output_format = codec_ext_map.get(codec, self.config.default_audio_format)
+            if codec not in codec_ext_map:
+                stream_copy = False
+        else:
+            # User specified format — check if codec matches
+            expected_codec = get_audio_codec(output_format)
+            if expected_codec != 'copy' and expected_codec != codec:
+                stream_copy = False
+
+        stem = Path(input_path).stem
+        out_dir = self._get_output_dir(output_dir, subdirectory="extracted")
+        output_path = os.path.join(out_dir, f"{stem}.{output_format}")
+
+        total_duration = get_media_duration(Path(input_path))
+
+        # Build ffmpeg command
+        cmd = ['ffmpeg', '-i', input_path, '-vn']
+        if stream_copy:
+            cmd.extend(['-acodec', 'copy'])
+        else:
+            target_codec = get_audio_codec(output_format)
+            cmd.extend(['-acodec', target_codec])
+            cmd.extend(['-b:a', self.config.default_audio_bitrate])
+        cmd.extend(['-progress', 'pipe:2', '-y', output_path])
+
+        self.report_progress(0.1, "Extracting audio stream...")
+        run_ffmpeg_with_progress(
+            cmd=cmd, total_duration=total_duration,
+            description="Extracting audio"
+        )
+
+        self.report_progress(0.9, "Hashing output file...")
+        job_id = self._store_job(
+            action="extract_audio", input_path=input_path, output_path=output_path,
+            parameters={"output_format": output_format, "stream_copy": stream_copy},
+            metadata={"codec": codec, "duration": total_duration,
+                       "source_video_path": input_path}
+        )
+
+        self.report_progress(1.0, "Complete")
+        self.logger.info(f"Extracted audio {input_path} -> {output_path} (stream_copy={stream_copy}, job={job_id})")
+
+        return {
+            "job_id": job_id,
+            "output_path": output_path,
+            "input_path": input_path,
+            "duration": total_duration,
+            "codec": codec,
+            "stream_copy": stream_copy,
+        }
+
+    def _segment_audio(self,
+                       input_path: str,  # Source audio file
+                       boundaries: List[Dict[str, float]],  # List of {"start": float, "end": float}
+                       output_dir: Optional[str] = None,  # Output directory override
+                       output_format: Optional[str] = None,  # Output format (default: same as input)
+                       filename_template: str = "segment_{index:03d}",  # Filename pattern
+                      ) -> Dict[str, Any]:  # Segmentation result with segments list
         """Split audio file into segments at specified boundaries."""
-        raise NotImplementedError("_segment_audio will be implemented in Phase 3")
+        input_path = str(input_path)
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"File not found: {input_path}")
+
+        if not boundaries:
+            raise ValueError("boundaries list must not be empty")
+
+        # Validate boundaries are sorted and non-overlapping
+        for i, b in enumerate(boundaries):
+            if b["end"] <= b["start"]:
+                raise ValueError(f"Boundary {i}: end ({b['end']}) must be > start ({b['start']})")
+            if i > 0 and b["start"] < boundaries[i - 1]["end"]:
+                raise ValueError(
+                    f"Boundary {i} start ({b['start']}) overlaps with boundary {i-1} end ({boundaries[i-1]['end']})"
+                )
+
+        ext = output_format or Path(input_path).suffix.lstrip('.')
+        stem = Path(input_path).stem
+        out_dir = self._get_output_dir(output_dir, subdirectory=f"segments/{stem}")
+        batch_key = str(uuid.uuid4())
+        total = len(boundaries)
+
+        self.report_progress(0.0, f"Segmenting into {total} segments...")
+
+        segments = []
+        for i, boundary in enumerate(boundaries):
+            start = boundary["start"]
+            end = boundary["end"]
+            duration = end - start
+
+            filename = f"{filename_template.format(index=i)}.{ext}"
+            output_path = os.path.join(out_dir, filename)
+
+            extract_audio_segment(
+                input_path=Path(input_path),
+                output_path=Path(output_path),
+                start_time=str(start),
+                duration=str(duration),
+            )
+
+            job_id = self._store_job(
+                action="segment_audio", input_path=input_path, output_path=output_path,
+                parameters={"start": start, "end": end, "index": i, "batch_key": batch_key},
+                metadata={"source_audio": input_path, "segment_count": total,
+                           "filename_template": filename_template}
+            )
+
+            segments.append({
+                "job_id": job_id,
+                "index": i,
+                "output_path": output_path,
+                "start": start,
+                "end": end,
+                "duration": duration,
+            })
+
+            self.report_progress((i + 1) / total, f"Segment {i + 1}/{total}")
+
+        total_duration = sum(s["duration"] for s in segments)
+        self.report_progress(1.0, f"Complete: {total} segments")
+        self.logger.info(f"Segmented {input_path} into {total} segments (batch_key={batch_key})")
+
+        return {
+            "segments": segments,
+            "input_path": input_path,
+            "segment_count": total,
+            "total_duration": total_duration,
+            "batch_key": batch_key,
+        }

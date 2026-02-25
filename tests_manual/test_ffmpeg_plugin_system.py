@@ -25,6 +25,14 @@ SAMPLE_AUDIO = os.path.join(TEST_DIR, "sample_audio.mp3")
 SAMPLE_VIDEO = os.path.join(TEST_DIR, "sample_video.mp4")
 
 
+def _reload_plugin(manager: PluginManager, config: dict = None):
+    """Unload, re-discover, and reload the plugin with the given config."""
+    manager.unload_all()
+    manager.discover_manifests()
+    plugin_meta = next(item for item in manager.discovered if item.name == PLUGIN_NAME)
+    manager.load_plugin(plugin_meta, config or {})
+
+
 async def test_discover_and_load():
     """Verify the plugin is discovered and loads via PluginManager."""
     print("=" * 60)
@@ -103,11 +111,7 @@ async def test_extract_segment_via_queue(manager: PluginManager):
 
     tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_ps_test_")
     try:
-        # Reload plugin with custom output_dir
-        manager.unload_all()
-        manager.discover_manifests()
-        plugin_meta = next(item for item in manager.discovered if item.name == PLUGIN_NAME)
-        manager.load_plugin(plugin_meta, {"output_dir": tmp_dir})
+        _reload_plugin(manager, {"output_dir": tmp_dir})
 
         queue = JobQueue(manager)
         await queue.start()
@@ -133,17 +137,107 @@ async def test_extract_segment_via_queue(manager: PluginManager):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+async def test_extract_audio_via_queue(manager: PluginManager):
+    """Verify extract_audio works via JobQueue over process boundary."""
+    print("=" * 60)
+    print("TEST: extract_audio via JobQueue")
+    print("=" * 60)
+
+    if not os.path.exists(SAMPLE_VIDEO):
+        print(f"  SKIPPED — {SAMPLE_VIDEO} not found\n")
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_ps_test_")
+    try:
+        _reload_plugin(manager, {"output_dir": tmp_dir})
+
+        queue = JobQueue(manager)
+        await queue.start()
+
+        job_id = await queue.submit(
+            PLUGIN_NAME,
+            action="extract_audio",
+            input_path=SAMPLE_VIDEO,
+            priority=10
+        )
+        job = await queue.wait_for_job(job_id, timeout=60)
+
+        assert job.status == JobStatus.completed, f"Expected completed, got {job.status}: {job.error}"
+        result = job.result
+        assert "output_path" in result
+        assert "job_id" in result
+        assert "codec" in result
+        assert "stream_copy" in result
+        assert os.path.exists(result["output_path"])
+        print(f"  Output: {os.path.basename(result['output_path'])}")
+        print(f"  Codec: {result['codec']}")
+        print(f"  Stream copy: {result['stream_copy']}")
+        print(f"  Duration: {result['duration']:.1f}s")
+
+        await queue.stop()
+        print("  PASSED\n")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def test_segment_audio_via_queue(manager: PluginManager):
+    """Verify segment_audio works via JobQueue over process boundary."""
+    print("=" * 60)
+    print("TEST: segment_audio via JobQueue")
+    print("=" * 60)
+
+    if not os.path.exists(SAMPLE_AUDIO):
+        print(f"  SKIPPED — {SAMPLE_AUDIO} not found\n")
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_ps_test_")
+    try:
+        _reload_plugin(manager, {"output_dir": tmp_dir})
+
+        queue = JobQueue(manager)
+        await queue.start()
+
+        boundaries = [
+            {"start": 0.0, "end": 30.0},
+            {"start": 30.0, "end": 60.0},
+            {"start": 60.0, "end": 90.0},
+        ]
+
+        job_id = await queue.submit(
+            PLUGIN_NAME,
+            action="segment_audio",
+            input_path=SAMPLE_AUDIO,
+            boundaries=boundaries,
+            priority=10
+        )
+        job = await queue.wait_for_job(job_id, timeout=120)
+
+        assert job.status == JobStatus.completed, f"Expected completed, got {job.status}: {job.error}"
+        result = job.result
+        assert result["segment_count"] == 3
+        assert "batch_key" in result
+        assert len(result["segments"]) == 3
+
+        print(f"  Segments: {result['segment_count']}")
+        print(f"  Batch key: {result['batch_key'][:8]}...")
+        for seg in result["segments"]:
+            assert os.path.exists(seg["output_path"])
+            print(f"    Segment {seg['index']}: [{seg['start']:.1f}-{seg['end']:.1f}]"
+                  f" -> {os.path.basename(seg['output_path'])}")
+
+        await queue.stop()
+        print("  PASSED\n")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 async def test_unknown_action_via_queue(manager: PluginManager):
     """Verify unknown action fails correctly via JobQueue."""
     print("=" * 60)
     print("TEST: Unknown action via JobQueue")
     print("=" * 60)
 
-    # Reload plugin with defaults
-    manager.unload_all()
-    manager.discover_manifests()
-    plugin_meta = next(item for item in manager.discovered if item.name == PLUGIN_NAME)
-    manager.load_plugin(plugin_meta, {})
+    _reload_plugin(manager)
 
     queue = JobQueue(manager)
     await queue.start()
@@ -167,6 +261,8 @@ async def run_integration():
 
     await test_get_info_via_queue(manager)
     await test_extract_segment_via_queue(manager)
+    await test_extract_audio_via_queue(manager)
+    await test_segment_audio_via_queue(manager)
     await test_unknown_action_via_queue(manager)
 
     manager.unload_all()

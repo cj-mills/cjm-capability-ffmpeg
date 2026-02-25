@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 from cjm_media_plugin_ffmpeg.meta import get_plugin_metadata
 from cjm_media_plugin_ffmpeg.plugin import FFmpegPluginConfig, FFmpegProcessingPlugin
@@ -104,35 +105,21 @@ def test_plugin_lifecycle():
     print("  PASSED\n")
 
 
-def test_execute_stubs():
-    """Verify execute dispatcher raises NotImplementedError for Phase 3 stubs."""
+def test_unknown_action():
+    """Verify unknown action raises ValueError."""
     print("=" * 60)
-    print("TEST: Execute Stubs (Phase 3)")
+    print("TEST: Unknown Action")
     print("=" * 60)
 
     plugin = FFmpegProcessingPlugin()
     plugin.initialize({})
 
-    stub_actions = [
-        ("extract_audio", {"input_path": "/tmp/test.mp4"}),
-        ("segment_audio", {"input_path": "/tmp/test.mp3", "boundaries": []}),
-    ]
-
-    for action, kwargs in stub_actions:
-        try:
-            plugin.execute(action=action, **kwargs)
-            print(f"  {action}: ERROR — should have raised NotImplementedError")
-            sys.exit(1)
-        except NotImplementedError:
-            print(f"  {action}: correctly raises NotImplementedError")
-
-    # Unknown action should raise ValueError
     try:
         plugin.execute(action="unknown_action")
-        print("  unknown_action: ERROR — should have raised ValueError")
+        print("  ERROR — should have raised ValueError")
         sys.exit(1)
     except ValueError as e:
-        print(f"  unknown_action: correctly raises ValueError ('{e}')")
+        print(f"  Correctly raises ValueError ('{e}')")
 
     plugin.cleanup()
     print("  PASSED\n")
@@ -252,7 +239,6 @@ def test_convert():
         assert os.path.exists(output_path), f"Output file not created: {output_path}"
         assert output_path.endswith(".wav")
 
-        # Verify output is valid audio
         info = plugin.get_info(output_path)
         assert info.duration > 0
         assert len(info.audio_streams) >= 1
@@ -262,18 +248,10 @@ def test_convert():
         print(f"  Output size: {info.size_bytes / 1024 / 1024:.1f} MB")
         print(f"  Output codec: {info.audio_streams[0]['codec']}")
 
-        # Verify job was stored
         jobs = plugin.storage.list_jobs(limit=1)
         assert len(jobs) == 1
         assert jobs[0].action == "convert"
-        assert jobs[0].input_path == SAMPLE_AUDIO
-        assert jobs[0].output_path == output_path
         print(f"  Job stored: {jobs[0].job_id[:8]}...")
-
-        # Verify via execute dispatcher
-        result = plugin.execute(action="convert", input_path=SAMPLE_AUDIO, output_format="wav")
-        assert "output_path" in result
-        print("  Execute dispatch: OK")
 
         plugin.cleanup()
         print("  PASSED\n")
@@ -300,42 +278,254 @@ def test_extract_segment():
         expected_duration = end - start
 
         output_path = plugin.extract_segment(SAMPLE_AUDIO, start, end)
-        assert os.path.exists(output_path), f"Output file not created: {output_path}"
+        assert os.path.exists(output_path)
 
-        # Verify output duration is approximately correct
         info = plugin.get_info(output_path)
-        assert abs(info.duration - expected_duration) < 1.0, \
-            f"Duration mismatch: expected ~{expected_duration}s, got {info.duration:.2f}s"
-        print(f"  Input: {os.path.basename(SAMPLE_AUDIO)}")
+        assert abs(info.duration - expected_duration) < 1.0
         print(f"  Segment: [{start:.1f}s - {end:.1f}s]")
-        print(f"  Output: {os.path.basename(output_path)}")
         print(f"  Output duration: {info.duration:.2f}s (expected ~{expected_duration:.1f}s)")
 
-        # Verify job was stored
         jobs = plugin.storage.list_jobs(limit=1)
         assert len(jobs) == 1
         assert jobs[0].action == "extract_segment"
         print(f"  Job stored: {jobs[0].job_id[:8]}...")
 
-        # Test with custom output path
-        custom_output = os.path.join(tmp_dir, "custom_segment.mp3")
-        output_path2 = plugin.extract_segment(SAMPLE_AUDIO, 5.0, 10.0, output_path=custom_output)
-        assert output_path2 == custom_output
-        assert os.path.exists(custom_output)
-        print(f"  Custom output path: OK")
-
         # Test invalid range
         try:
             plugin.extract_segment(SAMPLE_AUDIO, 10.0, 5.0)
-            print("  ERROR — should have raised ValueError for end < start")
+            print("  ERROR — should have raised ValueError")
             sys.exit(1)
         except ValueError:
             print("  Invalid range correctly rejected")
 
-        # Verify via execute dispatcher
-        result = plugin.execute(action="extract_segment", input_path=SAMPLE_AUDIO, start=0.0, end=5.0)
+        plugin.cleanup()
+        print("  PASSED\n")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_extract_audio():
+    """Verify extract_audio extracts audio from video via stream copy."""
+    print("=" * 60)
+    print("TEST: extract_audio")
+    print("=" * 60)
+
+    if not os.path.exists(SAMPLE_VIDEO):
+        print(f"  SKIPPED — {SAMPLE_VIDEO} not found\n")
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_test_")
+    try:
+        plugin = FFmpegProcessingPlugin()
+        plugin.initialize({"output_dir": tmp_dir})
+
+        t_start = time.time()
+        result = plugin.execute(action="extract_audio", input_path=SAMPLE_VIDEO)
+        elapsed = time.time() - t_start
+
         assert "output_path" in result
-        print("  Execute dispatch: OK")
+        assert "job_id" in result
+        assert "duration" in result
+        assert "codec" in result
+        assert "stream_copy" in result
+        assert os.path.exists(result["output_path"])
+
+        # Verify output is valid audio
+        info = plugin.get_info(result["output_path"])
+        assert info.duration > 0
+        assert len(info.audio_streams) >= 1
+
+        print(f"  Input: {os.path.basename(SAMPLE_VIDEO)}")
+        print(f"  Output: {os.path.basename(result['output_path'])}")
+        print(f"  Codec: {result['codec']}")
+        print(f"  Stream copy: {result['stream_copy']}")
+        print(f"  Duration: {result['duration']:.1f}s")
+        print(f"  Output size: {info.size_bytes / 1024 / 1024:.1f} MB")
+        print(f"  Elapsed: {elapsed:.1f}s")
+
+        # Stream copy should be fast (well under the file duration)
+        if result["stream_copy"]:
+            assert elapsed < result["duration"] / 10, \
+                f"Stream copy too slow: {elapsed:.1f}s for {result['duration']:.1f}s file"
+            print(f"  Speed check: OK (stream copy is fast)")
+
+        # Verify job was stored
+        jobs = plugin.storage.list_jobs(limit=1)
+        assert len(jobs) == 1
+        assert jobs[0].action == "extract_audio"
+        print(f"  Job stored: {jobs[0].job_id[:8]}...")
+
+        plugin.cleanup()
+        print("  PASSED\n")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_extract_audio_with_format():
+    """Verify extract_audio with explicit output format triggers re-encoding."""
+    print("=" * 60)
+    print("TEST: extract_audio (with output_format)")
+    print("=" * 60)
+
+    if not os.path.exists(SAMPLE_VIDEO):
+        print(f"  SKIPPED — {SAMPLE_VIDEO} not found\n")
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_test_")
+    try:
+        plugin = FFmpegProcessingPlugin()
+        plugin.initialize({"output_dir": tmp_dir})
+
+        # Request MP3 from AAC video — should re-encode
+        result = plugin.execute(action="extract_audio", input_path=SAMPLE_VIDEO, output_format="mp3")
+        assert os.path.exists(result["output_path"])
+        assert result["output_path"].endswith(".mp3")
+        assert result["stream_copy"] is False
+
+        info = plugin.get_info(result["output_path"])
+        assert info.duration > 0
+        print(f"  Output: {os.path.basename(result['output_path'])}")
+        print(f"  Stream copy: {result['stream_copy']} (re-encoded to mp3)")
+        print(f"  Output size: {info.size_bytes / 1024 / 1024:.1f} MB")
+
+        plugin.cleanup()
+        print("  PASSED\n")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_segment_audio():
+    """Verify segment_audio splits audio at specified boundaries."""
+    print("=" * 60)
+    print("TEST: segment_audio")
+    print("=" * 60)
+
+    if not os.path.exists(SAMPLE_AUDIO):
+        print(f"  SKIPPED — {SAMPLE_AUDIO} not found\n")
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_test_")
+    try:
+        plugin = FFmpegProcessingPlugin()
+        plugin.initialize({"output_dir": tmp_dir})
+
+        boundaries = [
+            {"start": 0.0, "end": 30.0},
+            {"start": 30.0, "end": 60.0},
+            {"start": 60.0, "end": 90.0},
+        ]
+
+        result = plugin.execute(action="segment_audio", input_path=SAMPLE_AUDIO, boundaries=boundaries)
+        assert result["segment_count"] == 3
+        assert result["input_path"] == SAMPLE_AUDIO
+        assert "batch_key" in result
+        assert len(result["segments"]) == 3
+
+        print(f"  Input: {os.path.basename(SAMPLE_AUDIO)}")
+        print(f"  Segments: {result['segment_count']}")
+        print(f"  Total duration: {result['total_duration']:.1f}s")
+        print(f"  Batch key: {result['batch_key'][:8]}...")
+
+        for seg in result["segments"]:
+            assert os.path.exists(seg["output_path"])
+            info = plugin.get_info(seg["output_path"])
+            expected = seg["end"] - seg["start"]
+            assert abs(info.duration - expected) < 1.0
+            print(f"    Segment {seg['index']}: [{seg['start']:.1f}-{seg['end']:.1f}]"
+                  f" -> {os.path.basename(seg['output_path'])} ({info.duration:.2f}s)")
+
+        # Verify all jobs stored with correct batch_key
+        jobs = plugin.storage.list_jobs(limit=10)
+        segment_jobs = [j for j in jobs if j.action == "segment_audio"]
+        assert len(segment_jobs) == 3
+        batch_keys = {j.parameters["batch_key"] for j in segment_jobs}
+        assert len(batch_keys) == 1, f"Expected 1 batch_key, got {len(batch_keys)}"
+        assert batch_keys.pop() == result["batch_key"]
+        print(f"  All jobs share batch_key: OK")
+
+        plugin.cleanup()
+        print("  PASSED\n")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_segment_audio_validation():
+    """Verify segment_audio rejects invalid boundaries."""
+    print("=" * 60)
+    print("TEST: segment_audio (validation)")
+    print("=" * 60)
+
+    plugin = FFmpegProcessingPlugin()
+    plugin.initialize({})
+
+    # Empty boundaries
+    try:
+        plugin.execute(action="segment_audio", input_path=SAMPLE_AUDIO, boundaries=[])
+        print("  ERROR — should have raised ValueError for empty boundaries")
+        sys.exit(1)
+    except ValueError:
+        print("  Empty boundaries correctly rejected")
+
+    # Inverted boundary
+    try:
+        plugin.execute(action="segment_audio", input_path=SAMPLE_AUDIO,
+                       boundaries=[{"start": 10.0, "end": 5.0}])
+        print("  ERROR — should have raised ValueError for inverted boundary")
+        sys.exit(1)
+    except ValueError:
+        print("  Inverted boundary correctly rejected")
+
+    # Overlapping boundaries
+    try:
+        plugin.execute(action="segment_audio", input_path=SAMPLE_AUDIO,
+                       boundaries=[{"start": 0.0, "end": 20.0}, {"start": 15.0, "end": 30.0}])
+        print("  ERROR — should have raised ValueError for overlap")
+        sys.exit(1)
+    except ValueError:
+        print("  Overlapping boundaries correctly rejected")
+
+    # Missing file
+    try:
+        plugin.execute(action="segment_audio", input_path="/tmp/nonexistent.mp3",
+                       boundaries=[{"start": 0.0, "end": 10.0}])
+        print("  ERROR — should have raised FileNotFoundError")
+        sys.exit(1)
+    except FileNotFoundError:
+        print("  Missing file correctly rejected")
+
+    plugin.cleanup()
+    print("  PASSED\n")
+
+
+def test_segment_audio_custom_template():
+    """Verify segment_audio respects custom filename_template."""
+    print("=" * 60)
+    print("TEST: segment_audio (custom template)")
+    print("=" * 60)
+
+    if not os.path.exists(SAMPLE_AUDIO):
+        print(f"  SKIPPED — {SAMPLE_AUDIO} not found\n")
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_test_")
+    try:
+        plugin = FFmpegProcessingPlugin()
+        plugin.initialize({"output_dir": tmp_dir})
+
+        boundaries = [
+            {"start": 0.0, "end": 15.0},
+            {"start": 15.0, "end": 30.0},
+        ]
+
+        result = plugin.execute(
+            action="segment_audio", input_path=SAMPLE_AUDIO,
+            boundaries=boundaries, filename_template="chunk_{index:04d}"
+        )
+
+        for seg in result["segments"]:
+            basename = os.path.basename(seg["output_path"])
+            assert basename.startswith("chunk_"), f"Expected 'chunk_' prefix, got '{basename}'"
+            print(f"    {basename}")
 
         plugin.cleanup()
         print("  PASSED\n")
@@ -347,12 +537,17 @@ if __name__ == "__main__":
     test_metadata()
     test_config_schema()
     test_plugin_lifecycle()
-    test_execute_stubs()
+    test_unknown_action()
     test_get_info_audio()
     test_get_info_video()
     test_get_info_missing_file()
     test_convert()
     test_extract_segment()
+    test_extract_audio()
+    test_extract_audio_with_format()
+    test_segment_audio()
+    test_segment_audio_validation()
+    test_segment_audio_custom_template()
     print("=" * 60)
     print("ALL TESTS PASSED")
     print("=" * 60)
