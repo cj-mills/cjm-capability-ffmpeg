@@ -25,6 +25,6 @@ cjm_media_plugin_ffmpeg = "cjm_media_plugin_ffmpeg._modidx:d"
 version = {attr = "cjm_media_plugin_ffmpeg.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["cjm_media_plugin_ffmpeg"]
+include = ["cjm_media_plugin_ffmpeg*"]
 
 [tool.nbdev]
