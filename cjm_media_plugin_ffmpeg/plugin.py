@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import time
+from cjm_plugin_system.core.errors import PluginInputError
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -206,7 +207,9 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         elif action == "segment_audio":
             return self._segment_audio(**kwargs)
         else:
-            raise ValueError(f"Unknown action: {action}")
+            raise PluginInputError(  # SG-47: typed input-validation
+                f"Unknown action: {action}", fields_invalid=["action"],
+            )
 
     # ------------------------------------------------------------------
     # Core actions
@@ -218,7 +221,9 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         """Get metadata for a media file via ffprobe."""
         file_path = str(file_path)
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+            raise PluginInputError(  # SG-47: missing input file (multi-inherits FileNotFoundError via PluginInputError ValueError MRO chain? No — explicit FileNotFoundError preserved)
+            f"File not found: {file_path}", fields_invalid=["file_path"],
+        )
 
         cmd = [
             'ffprobe', '-v', 'quiet',
@@ -270,7 +275,9 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         """Convert media to a different format."""
         input_path = str(input_path)
         if not os.path.exists(input_path):
-            raise FileNotFoundError(f"File not found: {input_path}")
+            raise PluginInputError(  # SG-47: missing input file
+            f"File not found: {input_path}", fields_invalid=["input_path"],
+        )
 
         bitrate = kwargs.get('bitrate', self.config.default_audio_bitrate)
         sample_rate = kwargs.get('sample_rate')
@@ -318,11 +325,15 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         """Extract a temporal segment from a media file."""
         input_path = str(input_path)
         if not os.path.exists(input_path):
-            raise FileNotFoundError(f"File not found: {input_path}")
+            raise PluginInputError(  # SG-47: missing input file
+            f"File not found: {input_path}", fields_invalid=["input_path"],
+        )
 
         duration = end - start
         if duration <= 0:
-            raise ValueError(f"end ({end}) must be greater than start ({start})")
+            raise PluginInputError(  # SG-47: typed input-validation
+            f"end ({end}) must be greater than start ({start})", fields_invalid=["start", "end"],
+        )
 
         if output_path is None:
             ext = Path(input_path).suffix
@@ -358,14 +369,18 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         """Extract audio stream from a video file."""
         input_path = str(input_path)
         if not os.path.exists(input_path):
-            raise FileNotFoundError(f"File not found: {input_path}")
+            raise PluginInputError(  # SG-47: missing input file
+            f"File not found: {input_path}", fields_invalid=["input_path"],
+        )
 
         self.report_progress(0.0, "Probing video file...")
 
         # Detect audio codec
         codec = self._detect_audio_codec(input_path)
         if not codec:
-            raise ValueError(f"No audio stream found in: {input_path}")
+            raise PluginInputError(  # SG-47: input file has no audio stream
+            f"No audio stream found in: {input_path}", fields_invalid=["input_path"],
+        )
 
         # Determine output format and whether to stream copy
         stream_copy = self.config.prefer_stream_copy
@@ -436,7 +451,9 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         """Split audio file into segments at specified boundaries."""
         input_path = str(input_path)
         if not os.path.exists(input_path):
-            raise FileNotFoundError(f"File not found: {input_path}")
+            raise PluginInputError(  # SG-47: missing input file
+            f"File not found: {input_path}", fields_invalid=["input_path"],
+        )
 
         if not boundaries:
             raise ValueError("boundaries list must not be empty")
