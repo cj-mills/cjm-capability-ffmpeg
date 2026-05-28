@@ -36,6 +36,7 @@ from cjm_ffmpeg_utils.audio import extract_audio_segment, convert_to_mp3
 from cjm_ffmpeg_utils.execution import run_ffmpeg_with_progress
 
 from .meta import get_plugin_metadata
+from cjm_plugin_system.core.interface import plugin_action, collect_plugin_actions
 
 # %% ../nbs/plugin.ipynb #8df3995a
 @dataclass
@@ -188,28 +189,46 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                 action: str = "get_info",  # Action to perform
                 **kwargs
                ) -> Dict[str, Any]:  # Action result
-        """Dispatch to the appropriate action handler."""
-        if action == "get_info":
-            return self.get_info(kwargs["file_path"]).to_dict()
-        elif action == "convert":
-            output = self.convert(kwargs["input_path"], kwargs["output_format"], **{
-                k: v for k, v in kwargs.items() if k not in ("input_path", "output_format")
-            })
-            return {"output_path": output}
-        elif action == "extract_segment":
-            output = self.extract_segment(
-                kwargs["input_path"], kwargs["start"], kwargs["end"],
-                kwargs.get("output_path")
-            )
-            return {"output_path": output}
-        elif action == "extract_audio":
-            return self._extract_audio(**kwargs)
-        elif action == "segment_audio":
-            return self._segment_audio(**kwargs)
-        else:
-            raise PluginInputError(  # SG-47: typed input-validation
-                f"Unknown action: {action}", fields_invalid=["action"],
-            )
+        """Dispatch to the `@plugin_action`-tagged handler for `action` (SG-44)."""
+        for klass in type(self).__mro__:
+            for attr in vars(klass).values():
+                if getattr(attr, "_plugin_action", None) == action:
+                    return attr(self, **kwargs)
+        raise PluginInputError(  # SG-47: typed input-validation
+            f"Unknown action: {action}", fields_invalid=["action"],
+        )
+
+    @plugin_action("get_info")
+    def _action_get_info(self, **kwargs) -> Dict[str, Any]:
+        """Action wrapper -> get_info()."""
+        return self.get_info(kwargs["file_path"]).to_dict()
+
+    @plugin_action("convert")
+    def _action_convert(self, **kwargs) -> Dict[str, Any]:
+        """Action wrapper -> convert() (extract positional args, wrap path)."""
+        output = self.convert(kwargs["input_path"], kwargs["output_format"], **{
+            k: v for k, v in kwargs.items() if k not in ("input_path", "output_format")
+        })
+        return {"output_path": output}
+
+    @plugin_action("extract_segment")
+    def _action_extract_segment(self, **kwargs) -> Dict[str, Any]:
+        """Action wrapper -> extract_segment() (wrap path)."""
+        output = self.extract_segment(
+            kwargs["input_path"], kwargs["start"], kwargs["end"],
+            kwargs.get("output_path"),
+        )
+        return {"output_path": output}
+
+    @plugin_action("extract_audio")
+    def _action_extract_audio(self, **kwargs) -> Dict[str, Any]:
+        """Action wrapper -> _extract_audio()."""
+        return self._extract_audio(**kwargs)
+
+    @plugin_action("segment_audio")
+    def _action_segment_audio(self, **kwargs) -> Dict[str, Any]:
+        """Action wrapper -> _segment_audio()."""
+        return self._segment_audio(**kwargs)
 
     # ------------------------------------------------------------------
     # Core actions
@@ -523,3 +542,7 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             "total_duration": total_duration,
             "batch_key": batch_key,
         }
+
+
+FFmpegProcessingPlugin.supported_actions = collect_plugin_actions(FFmpegProcessingPlugin)
+

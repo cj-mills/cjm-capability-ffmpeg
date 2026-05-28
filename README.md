@@ -21,8 +21,8 @@ Total: 2 notebooks
 
 ``` mermaid
 graph LR
-    meta[meta<br/>Metadata]
-    plugin[plugin<br/>FFmpeg Processing Plugin]
+    meta["meta<br/>Metadata"]
+    plugin["plugin<br/>FFmpeg Processing Plugin"]
 
     plugin --> meta
 ```
@@ -171,7 +171,7 @@ class FFmpegProcessingPlugin:
                     action: str = "get_info",  # Action to perform
                     **kwargs
                    ) -> Dict[str, Any]:  # Action result
-        "Dispatch to the appropriate action handler."
+        "Dispatch to the `@plugin_action`-tagged handler for `action` (SG-44)."
     
     def get_info(self,
                      file_path: Union[str, Path],  # Path to media file
