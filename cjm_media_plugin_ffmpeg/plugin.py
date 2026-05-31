@@ -24,7 +24,8 @@ from cjm_media_plugin_system.processing_interface import MediaProcessingPlugin
 from cjm_media_plugin_system.core import MediaMetadata
 from cjm_media_plugin_system.storage import MediaProcessingStorage
 
-from cjm_plugin_system.utils.hashing import hash_file
+from cjm_plugin_system.utils.hashing import hash_file, hash_dict_canonical
+from cjm_plugin_system.utils.cache_paths import cache_dir_for_config
 from cjm_plugin_system.utils.validation import (
     dict_to_config, config_to_dict, dataclass_to_jsonschema,
     SCHEMA_TITLE, SCHEMA_DESC, SCHEMA_ENUM
@@ -149,19 +150,39 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                    parameters: Optional[Dict[str, Any]] = None,  # Action parameters
                    metadata: Optional[Dict[str, Any]] = None,  # Additional metadata
                    input_hash: Optional[str] = None,  # Pre-computed input hash (avoids re-hashing)
+                   config_hash: str = "",  # Cache key over the action's parameters
                   ) -> str:  # Generated job_id
-        """Hash input/output files and store a processing job record."""
+        """Hash input/output files and store a processing job record (upsert by
+        action + input_path + config_hash; logs + swallows save failures)."""
         job_id = str(uuid.uuid4())
         if input_hash is None:
             input_hash = hash_file(input_path)
         output_hash = hash_file(output_path)
-        self.storage.save(
+        self.storage.save_with_logging(
             job_id=job_id, action=action,
-            input_path=input_path, input_hash=input_hash,
+            input_path=input_path, input_hash=input_hash, config_hash=config_hash,
             output_path=output_path, output_hash=output_hash,
-            parameters=parameters, metadata=metadata
+            parameters=parameters, metadata=metadata, logger=self.logger,
         )
         return job_id
+
+    def _cache_paths(self,
+                     action: str,  # Action name (cache key component)
+                     input_path: str,  # Source file path
+                     parameters: Dict[str, Any],  # Action parameters (cache key component)
+                    ):  # -> (input_hash, config_hash, cached_output_or_None, output_dir)
+        """Layer B+C cache helpers for an output-producing action.
+
+        Returns the input content hash, the parameters' config hash, the cached
+        output path if a prior run for (action, input_path, input_hash, config_hash)
+        exists AND its file is still present, and a content+config-keyed output
+        directory (so runs with different parameters never collide on disk)."""
+        input_hash = hash_file(input_path)
+        config_hash = hash_dict_canonical(parameters)
+        cached = self.storage.get_cached(action, str(input_path), input_hash, config_hash)
+        cached_out = cached.output_path if (cached and os.path.exists(cached.output_path)) else None
+        out_dir = str(cache_dir_for_config(Path(self._data_dir), Path(input_path), action, parameters))
+        return input_hash, config_hash, cached_out, out_dir
 
     def _detect_audio_codec(self,
                             file_path: str,  # Path to media file
@@ -301,9 +322,16 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         bitrate = kwargs.get('bitrate', self.config.default_audio_bitrate)
         sample_rate = kwargs.get('sample_rate')
         channels = kwargs.get('channels')
+        parameters = {"output_format": output_format, "bitrate": bitrate,
+                      "sample_rate": sample_rate, "channels": channels}
+
+        # Layer B+C cache: skip the re-encode if this (input, params) was already done.
+        input_hash, config_hash, cached_out, out_dir = self._cache_paths("convert", input_path, parameters)
+        if cached_out is not None:
+            self.logger.info(f"Using cached convert output: {cached_out}")
+            return cached_out
 
         stem = Path(input_path).stem
-        out_dir = self._get_output_dir(subdirectory="converted")
         output_path = os.path.join(out_dir, f"{stem}.{output_format}")
 
         total_duration = get_media_duration(Path(input_path))
@@ -327,9 +355,8 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
 
         job_id = self._store_job(
             action="convert", input_path=input_path, output_path=output_path,
-            parameters={"output_format": output_format, "bitrate": bitrate,
-                         "sample_rate": sample_rate, "channels": channels},
-            metadata={"duration": total_duration}
+            parameters=parameters, metadata={"duration": total_duration},
+            input_hash=input_hash, config_hash=config_hash,
         )
         self.report_progress(1.0, "Complete")
         self.logger.info(f"Converted {input_path} -> {output_path} (job={job_id})")
@@ -354,10 +381,15 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             f"end ({end}) must be greater than start ({start})", fields_invalid=["start", "end"],
         )
 
+        parameters = {"start": start, "end": end, "duration": duration}
+        input_hash, config_hash, cached_out, out_dir = self._cache_paths("extract_segment", input_path, parameters)
+
         if output_path is None:
+            if cached_out is not None:
+                self.logger.info(f"Using cached segment output: {cached_out}")
+                return cached_out
             ext = Path(input_path).suffix
             stem = Path(input_path).stem
-            out_dir = self._get_output_dir(subdirectory="segments")
             output_path = os.path.join(out_dir, f"{stem}_{start:.2f}_{end:.2f}{ext}")
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -371,7 +403,7 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
 
         job_id = self._store_job(
             action="extract_segment", input_path=input_path, output_path=output_path,
-            parameters={"start": start, "end": end, "duration": duration},
+            parameters=parameters, input_hash=input_hash, config_hash=config_hash,
         )
         self.logger.info(f"Extracted segment [{start:.2f}-{end:.2f}] -> {output_path} (job={job_id})")
         return output_path
@@ -419,7 +451,20 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                 stream_copy = False
 
         stem = Path(input_path).stem
-        out_dir = self._get_output_dir(output_dir, subdirectory="extracted")
+        parameters = {"output_format": output_format, "stream_copy": stream_copy}
+
+        # Layer B+C cache (params are the effective format + stream_copy, derived above).
+        input_hash, config_hash, cached_out, out_dir = self._cache_paths("extract_audio", input_path, parameters)
+        if cached_out is not None:
+            cached = self.storage.get_cached("extract_audio", str(input_path), input_hash, config_hash)
+            meta = cached.metadata or {}
+            self.logger.info(f"Using cached extracted audio: {cached_out}")
+            return {
+                "job_id": cached.job_id, "output_path": cached_out, "input_path": input_path,
+                "duration": meta.get("duration"), "codec": meta.get("codec", codec),
+                "stream_copy": stream_copy,
+            }
+
         output_path = os.path.join(out_dir, f"{stem}.{output_format}")
 
         total_duration = get_media_duration(Path(input_path))
@@ -443,9 +488,10 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         self.report_progress(0.9, "Hashing output file...")
         job_id = self._store_job(
             action="extract_audio", input_path=input_path, output_path=output_path,
-            parameters={"output_format": output_format, "stream_copy": stream_copy},
+            parameters=parameters,
             metadata={"codec": codec, "duration": total_duration,
-                       "source_video_path": input_path}
+                       "source_video_path": input_path},
+            input_hash=input_hash, config_hash=config_hash,
         )
 
         self.report_progress(1.0, "Complete")
@@ -487,14 +533,19 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                 )
 
         ext = output_format or Path(input_path).suffix.lstrip('.')
-        stem = Path(input_path).stem
-        out_dir = self._get_output_dir(output_dir, subdirectory=f"segments/{stem}")
         batch_key = str(uuid.uuid4())
         total = len(boundaries)
 
-        # Hash input once (avoids re-hashing per segment)
+        # Layer B: content+config-keyed batch directory (keyed on boundaries + format
+        # + template), so re-segmenting with DIFFERENT boundaries never overwrites a
+        # prior batch's files. Hashes the input once (reused per segment).
+        batch_params = {"boundaries": boundaries, "output_format": ext,
+                        "filename_template": filename_template}
         self.report_progress(0.0, "Hashing input file...")
-        cached_input_hash = hash_file(input_path)
+        cached_input_hash, _, _, out_dir = self._cache_paths("segment_audio", input_path, batch_params)
+        if output_dir is not None:
+            out_dir = os.path.join(output_dir, "segments", Path(input_path).stem)
+        os.makedirs(out_dir, exist_ok=True)
 
         segments = []
         for i, boundary in enumerate(boundaries):
@@ -512,12 +563,13 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                 duration=str(duration),
             )
 
+            seg_config_hash = hash_dict_canonical({"start": start, "end": end, "index": i, "output_format": ext})
             job_id = self._store_job(
                 action="segment_audio", input_path=input_path, output_path=output_path,
-                parameters={"start": start, "end": end, "index": i, "batch_key": batch_key},
+                parameters={"start": start, "end": end, "index": i},
                 metadata={"source_audio": input_path, "segment_count": total,
                            "filename_template": filename_template},
-                input_hash=cached_input_hash,
+                input_hash=cached_input_hash, config_hash=seg_config_hash,
             )
 
             segments.append({
