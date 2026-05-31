@@ -555,22 +555,27 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
 
             filename = f"{filename_template.format(index=i)}.{ext}"
             output_path = os.path.join(out_dir, filename)
-
-            extract_audio_segment(
-                input_path=Path(input_path),
-                output_path=Path(output_path),
-                start_time=str(start),
-                duration=str(duration),
-            )
-
             seg_config_hash = hash_dict_canonical({"start": start, "end": end, "index": i, "output_format": ext})
-            job_id = self._store_job(
-                action="segment_audio", input_path=input_path, output_path=output_path,
-                parameters={"start": start, "end": end, "index": i},
-                metadata={"source_audio": input_path, "segment_count": total,
-                           "filename_template": filename_template},
-                input_hash=cached_input_hash, config_hash=seg_config_hash,
-            )
+
+            # Per-segment Layer C skip: reuse an identical segment already on disk.
+            seg_cached = self.storage.get_cached("segment_audio", str(input_path), cached_input_hash, seg_config_hash)
+            if seg_cached is not None and os.path.exists(seg_cached.output_path):
+                output_path = seg_cached.output_path
+                job_id = seg_cached.job_id
+            else:
+                extract_audio_segment(
+                    input_path=Path(input_path),
+                    output_path=Path(output_path),
+                    start_time=str(start),
+                    duration=str(duration),
+                )
+                job_id = self._store_job(
+                    action="segment_audio", input_path=input_path, output_path=output_path,
+                    parameters={"start": start, "end": end, "index": i},
+                    metadata={"source_audio": input_path, "segment_count": total,
+                               "filename_template": filename_template},
+                    input_hash=cached_input_hash, config_hash=seg_config_hash,
+                )
 
             segments.append({
                 "job_id": job_id,
