@@ -32,6 +32,8 @@ def get_plugin_metadata() -> Dict[str, Any]:  # Plugin metadata for manifest gen
     return {
         "name": plugin_name,
         "version": __version__,
+        # T24: non-empty description required by the substrate validator (SG-6 / V1 gate).
+        "description": "FFmpeg-based media processing: audio extraction, format conversion, and temporal segment extraction for the cjm-plugin-system.",
         "type": "media-processing",
         "category": "media",
         "interface": "cjm_media_plugin_system.processing_interface.MediaProcessingPlugin",
@@ -39,9 +41,9 @@ def get_plugin_metadata() -> Dict[str, Any]:  # Plugin metadata for manifest gen
         "class": "FFmpegProcessingPlugin",
         "python_path": sys.executable,
         "db_path": db_path,
+        # Phase 5a / CR-7 reframe: binary hard-facts only (quantitative amounts dropped, V12 gate).
         "resources": {
-            "requires_gpu": False,
-            "min_system_ram_mb": 512
+            "requires_gpu": False
         },
         "env_vars": {}
     }

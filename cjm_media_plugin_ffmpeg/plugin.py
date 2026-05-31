@@ -31,10 +31,12 @@ from cjm_plugin_system.utils.validation import (
     SCHEMA_TITLE, SCHEMA_DESC, SCHEMA_ENUM
 )
 
-from cjm_ffmpeg_utils.core import FFMPEG_AVAILABLE, get_audio_codec
-from cjm_ffmpeg_utils.media_info import get_audio_info_ffmpeg, get_media_duration
-from cjm_ffmpeg_utils.audio import extract_audio_segment, convert_to_mp3
-from cjm_ffmpeg_utils.execution import run_ffmpeg_with_progress
+# FFmpeg helpers (lifted from the retired cjm-ffmpeg-utils into this plugin's utils/ sub-package)
+from .utils.availability import FFMPEG_AVAILABLE
+from .utils.codec import get_audio_codec
+from .utils.probe import get_media_duration
+from .utils.segments import extract_audio_segment
+from .utils.progress import run_ffmpeg_with_progress
 
 from .meta import get_plugin_metadata
 from cjm_plugin_system.core.interface import plugin_action, collect_plugin_actions

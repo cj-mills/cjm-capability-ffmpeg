@@ -13,12 +13,10 @@ dependencies:
     # Tier 2 Interface
     - cjm-media-plugin-system
 
-    # FFmpeg Operations
-    - cjm-ffmpeg-utils
-
     # Utilities
     - fastcore
     - pydantic
+    - tqdm  # progress bars for ffmpeg subprocess runs (utils.progress; formerly pulled in via cjm-ffmpeg-utils)
 
     # Worker dependencies
     - fastapi
