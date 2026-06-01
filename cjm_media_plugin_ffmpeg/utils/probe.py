@@ -7,7 +7,7 @@ Docs: https://cj-mills.github.io/cjm-media-plugin-ffmpegutils/probe.html.md"""
 # %% auto #0
 __all__ = ['get_media_duration']
 
-# %% ../../nbs/utils/probe.ipynb #c1349e07
+# %% ../../nbs/utils/probe.ipynb #365e8c58
 from pathlib import Path
 from typing import Optional
 import subprocess

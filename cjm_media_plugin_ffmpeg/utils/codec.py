@@ -7,7 +7,7 @@ Docs: https://cj-mills.github.io/cjm-media-plugin-ffmpegutils/codec.html.md"""
 # %% auto #0
 __all__ = ['get_audio_codec']
 
-# %% ../../nbs/utils/codec.ipynb #03bf7cec
+# %% ../../nbs/utils/codec.ipynb #6d1e0d9b
 def get_audio_codec(audio_format: str  # The desired audio format (e.g. 'mp3', 'wav')
                    ) -> str:  # The ffmpeg audio codec name ('copy' if unknown)
     """Map an audio container format to the appropriate ffmpeg codec."""

@@ -7,7 +7,7 @@ Docs: https://cj-mills.github.io/cjm-media-plugin-ffmpegutils/availability.html.
 # %% auto #0
 __all__ = ['FFMPEG_AVAILABLE']
 
-# %% ../../nbs/utils/availability.ipynb #8b1af7aa
+# %% ../../nbs/utils/availability.ipynb #8fbacc93
 import shutil
 import logging
 

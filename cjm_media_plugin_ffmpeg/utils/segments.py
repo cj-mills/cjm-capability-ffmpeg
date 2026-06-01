@@ -7,7 +7,7 @@ Docs: https://cj-mills.github.io/cjm-media-plugin-ffmpegutils/segments.html.md""
 # %% auto #0
 __all__ = ['extract_audio_segment']
 
-# %% ../../nbs/utils/segments.ipynb #774c499c
+# %% ../../nbs/utils/segments.ipynb #e5d22ed1
 from pathlib import Path
 import subprocess
 from .progress import run_ffmpeg_with_progress

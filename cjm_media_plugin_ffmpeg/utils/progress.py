@@ -7,7 +7,7 @@ Docs: https://cj-mills.github.io/cjm-media-plugin-ffmpegutils/progress.html.md""
 # %% auto #0
 __all__ = ['parse_progress_line', 'run_ffmpeg_with_progress']
 
-# %% ../../nbs/utils/progress.ipynb #9a2b7aed
+# %% ../../nbs/utils/progress.ipynb #c671eb90
 from typing import List, Optional, Callable
 import subprocess
 from tqdm.auto import tqdm
