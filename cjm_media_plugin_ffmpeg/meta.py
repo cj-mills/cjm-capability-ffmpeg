@@ -17,11 +17,11 @@ from . import __version__
 # %% ../nbs/meta.ipynb #3983c2e8
 def get_plugin_metadata() -> Dict[str, Any]:  # Plugin metadata for manifest generation
     """Return metadata required to register this plugin with the PluginManager."""
-    cjm_data_dir = os.environ.get("CJM_DATA_DIR")
+    cjm_plugin_data_dir = os.environ.get("CJM_PLUGIN_DATA_DIR")
     plugin_name = "cjm-media-plugin-ffmpeg"
 
-    if cjm_data_dir:
-        data_dir = os.path.join(cjm_data_dir, plugin_name)
+    if cjm_plugin_data_dir:
+        data_dir = os.path.join(cjm_plugin_data_dir, plugin_name)
     else:
         base_path = os.path.dirname(os.path.dirname(sys.executable))
         data_dir = os.path.join(base_path, "data")

@@ -95,11 +95,11 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
 
     @property
     def name(self) -> str:  # Plugin identifier
-        return "ffmpeg"
+        return get_plugin_metadata()["name"]
 
     @property
     def version(self) -> str:  # Plugin version
-        return "1.0.0"
+        return get_plugin_metadata()["version"]
 
     @property
     def supported_media_types(self) -> List[str]:  # Supported input types
@@ -125,10 +125,6 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
     def is_available(self) -> bool:  # Whether ffmpeg is installed
         """Check if ffmpeg is available on this system."""
         return FFMPEG_AVAILABLE
-
-    def cleanup(self) -> None:
-        """Clean up plugin resources."""
-        self.logger.info("FFmpeg plugin cleaned up")
 
     # ------------------------------------------------------------------
     # Helpers
@@ -213,13 +209,7 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
                 **kwargs
                ) -> Dict[str, Any]:  # Action result
         """Dispatch to the `@plugin_action`-tagged handler for `action` (SG-44)."""
-        for klass in type(self).__mro__:
-            for attr in vars(klass).values():
-                if getattr(attr, "_plugin_action", None) == action:
-                    return attr(self, **kwargs)
-        raise PluginInputError(  # SG-47: typed input-validation
-            f"Unknown action: {action}", fields_invalid=["action"],
-        )
+        return self.dispatch_to_action(action, **kwargs)
 
     @plugin_action("get_info")
     def _action_get_info(self, **kwargs) -> Dict[str, Any]:
