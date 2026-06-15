@@ -80,6 +80,15 @@ class FFmpegPluginConfig:
         }
     )
 
+    resampler: str = field(
+        default="soxr",
+        metadata={
+            SCHEMA_TITLE: "Resampler",
+            SCHEMA_DESC: "Audio resampling engine for sample-rate conversion. 'soxr' (libsoxr, high quality, matches librosa's soxr_hq) is preferred over ffmpeg's default 'swr'; needs an ffmpeg built --enable-libsoxr.",
+            SCHEMA_ENUM: ["soxr", "swr"]
+        }
+    )
+
 # %% ../nbs/plugin.ipynb #5a61a955
 class FFmpegProcessingPlugin(MediaProcessingPlugin):
     """FFmpeg-based media processing plugin."""
@@ -314,8 +323,10 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         bitrate = kwargs.get('bitrate', self.config.default_audio_bitrate)
         sample_rate = kwargs.get('sample_rate')
         channels = kwargs.get('channels')
+        resampler = kwargs.get('resampler', self.config.resampler)
         parameters = {"output_format": output_format, "bitrate": bitrate,
-                      "sample_rate": sample_rate, "channels": channels}
+                      "sample_rate": sample_rate, "channels": channels,
+                      "resampler": resampler}
 
         # Layer B+C cache: skip the re-encode if this (input, params) was already done.
         input_hash, config_hash, cached_out, out_dir = self._cache_paths("convert", input_path, parameters)
@@ -334,6 +345,12 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         if bitrate:
             cmd.extend(['-b:a', bitrate])
         if sample_rate:
+            # Resample with the configured engine (soxr by default — libsoxr at HQ
+            # precision, matching librosa's soxr_hq; higher quality than ffmpeg's
+            # swr default, standardizing ALL ffmpeg-processed input on the cleaner
+            # resampler). `resampler` is in the cache-key parameters above.
+            if resampler:
+                cmd.extend(['-af', f'aresample=resampler={resampler}:precision=20'])
             cmd.extend(['-ar', str(sample_rate)])
         if channels:
             cmd.extend(['-ac', str(channels)])
