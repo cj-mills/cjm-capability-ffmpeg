@@ -12,10 +12,16 @@ pip install cjm_media_plugin_ffmpeg
 ## Project Structure
 
     nbs/
-    ├── meta.ipynb   # Metadata introspection for the FFmpeg media processing plugin used by `cjm-ctl` to generate the registration manifest.
-    └── plugin.ipynb # FFmpeg-based media processing plugin implementing the `MediaProcessingPlugin` interface.
+    ├── utils/ (5)
+    │   ├── availability.ipynb  # Detect whether the `ffmpeg` binary is installed on this system.
+    │   ├── codec.ipynb         # Map audio container formats to the ffmpeg codec used to encode them.
+    │   ├── probe.ipynb         # Probe media files for metadata (duration, ...) via ffprobe.
+    │   ├── progress.ipynb      # Run ffmpeg subprocess commands with a progress bar and optional callback.
+    │   └── segments.ipynb      # Extract temporal segments from audio files via ffmpeg stream-copy.
+    ├── meta.ipynb    # Metadata introspection for the FFmpeg media processing plugin used by `cjm-ctl` to generate the registration manifest.
+    └── plugin.ipynb  # FFmpeg-based media processing plugin implementing the `MediaProcessingPlugin` interface.
 
-Total: 2 notebooks
+Total: 7 notebooks across 1 directory
 
 ## Module Dependencies
 
@@ -23,11 +29,22 @@ Total: 2 notebooks
 graph LR
     meta["meta<br/>Metadata"]
     plugin["plugin<br/>FFmpeg Processing Plugin"]
+    utils_availability["utils.availability<br/>FFmpeg Availability"]
+    utils_codec["utils.codec<br/>Audio Codec Map"]
+    utils_probe["utils.probe<br/>Media Probing"]
+    utils_progress["utils.progress<br/>FFmpeg Execution + Progress"]
+    utils_segments["utils.segments<br/>Audio Segment Extraction"]
 
+    plugin --> utils_probe
+    plugin --> utils_segments
+    plugin --> utils_availability
+    plugin --> utils_progress
     plugin --> meta
+    plugin --> utils_codec
+    utils_segments --> utils_progress
 ```
 
-*1 cross-module dependencies detected*
+*7 cross-module dependencies detected*
 
 ## CLI Reference
 
@@ -36,6 +53,44 @@ No CLI commands found in this project.
 ## Module Overview
 
 Detailed documentation for each module in the project:
+
+### FFmpeg Availability (`availability.ipynb`)
+
+> Detect whether the `ffmpeg` binary is installed on this system.
+
+#### Import
+
+``` python
+from cjm_media_plugin_ffmpeg.utils.availability import (
+    FFMPEG_AVAILABLE
+)
+```
+
+#### Variables
+
+``` python
+FFMPEG_AVAILABLE
+```
+
+### Audio Codec Map (`codec.ipynb`)
+
+> Map audio container formats to the ffmpeg codec used to encode them.
+
+#### Import
+
+``` python
+from cjm_media_plugin_ffmpeg.utils.codec import (
+    get_audio_codec
+)
+```
+
+#### Functions
+
+``` python
+def get_audio_codec(audio_format: str  # The desired audio format (e.g. 'mp3', 'wav')
+                   ) -> str:  # The ffmpeg audio codec name ('copy' if unknown)
+    "Map an audio container format to the appropriate ffmpeg codec."
+```
 
 ### Metadata (`meta.ipynb`)
 
@@ -55,10 +110,10 @@ from cjm_media_plugin_ffmpeg.meta import (
 ``` python
 def get_plugin_metadata() -> Dict[str, Any]:  # Plugin metadata for manifest generation
     """Return metadata required to register this plugin with the PluginManager."""
-    cjm_data_dir = os.environ.get("CJM_DATA_DIR")
+    cjm_plugin_data_dir = os.environ.get("CJM_PLUGIN_DATA_DIR")
     plugin_name = "cjm-media-plugin-ffmpeg"
 
-    if cjm_data_dir
+    if cjm_plugin_data_dir
     "Return metadata required to register this plugin with the PluginManager."
 ```
 
@@ -87,6 +142,7 @@ class FFmpegPluginConfig:
     default_audio_format: str = field(...)
     default_audio_bitrate: str = field(...)
     prefer_stream_copy: bool = field(...)
+    resampler: str = field(...)
 ```
 
 ``` python
@@ -104,13 +160,13 @@ class FFmpegProcessingPlugin:
         "Initialize the FFmpeg processing plugin."
     
     def name(self) -> str:  # Plugin identifier
-            return "ffmpeg"
+            return get_plugin_metadata()["name"]
     
         @property
         def version(self) -> str:  # Plugin version
     
     def version(self) -> str:  # Plugin version
-            return "1.0.0"
+            return get_plugin_metadata()["version"]
     
         @property
         def supported_media_types(self) -> List[str]:  # Supported input types
@@ -150,13 +206,6 @@ class FFmpegProcessingPlugin:
             """Check if ffmpeg is available on this system."""
             return FFMPEG_AVAILABLE
     
-        def cleanup(self) -> None
-        "Check if ffmpeg is available on this system."
-    
-    def cleanup(self) -> None:
-            """Clean up plugin resources."""
-            self.logger.info("FFmpeg plugin cleaned up")
-    
         # ------------------------------------------------------------------
         # Helpers
         # ------------------------------------------------------------------
@@ -165,7 +214,7 @@ class FFmpegProcessingPlugin:
                             output_dir: Optional[str] = None,  # Explicit output dir override
                             subdirectory: Optional[str] = None,  # Subdirectory within output dir
                            ) -> str:  # Resolved output directory path
-        "Clean up plugin resources."
+        "Check if ffmpeg is available on this system."
     
     def execute(self,
                     action: str = "get_info",  # Action to perform
@@ -192,4 +241,83 @@ class FFmpegProcessingPlugin:
                             output_path: Optional[str] = None,  # Custom output path
                            ) -> str:  # Output file path
         "Extract a temporal segment from a media file."
+```
+
+### Media Probing (`probe.ipynb`)
+
+> Probe media files for metadata (duration, …) via ffprobe.
+
+#### Import
+
+``` python
+from cjm_media_plugin_ffmpeg.utils.probe import (
+    get_media_duration
+)
+```
+
+#### Functions
+
+``` python
+def get_media_duration(file_path: Path  # Path to the media file
+                      ) -> Optional[float]:  # Duration in seconds, or None if it cannot be determined
+    "Get the duration of a media file (seconds) via ffprobe."
+```
+
+### FFmpeg Execution + Progress (`progress.ipynb`)
+
+> Run ffmpeg subprocess commands with a progress bar and optional
+> callback.
+
+#### Import
+
+``` python
+from cjm_media_plugin_ffmpeg.utils.progress import (
+    parse_progress_line,
+    run_ffmpeg_with_progress
+)
+```
+
+#### Functions
+
+``` python
+def parse_progress_line(line: str  # A line of stderr output from ffmpeg
+                        ) -> Optional[float]:  # Current time in seconds, or None if the line has no progress info
+    "Parse a progress line from ffmpeg stderr output."
+```
+
+``` python
+def run_ffmpeg_with_progress(
+    cmd: List[str],  # The ffmpeg command and arguments
+    total_duration: Optional[float] = None,  # Total duration in seconds for a determinate bar, else indeterminate
+    description: str = "Processing",  # Description text for the progress bar
+    verbose: bool = False,  # If True, prints detailed ffmpeg output
+    progress_callback: Optional[Callable[[float], None]] = None  # Optional callback receiving current progress in seconds
+) -> None:  # Raises FileNotFoundError or subprocess.CalledProcessError on failure
+    "Run an ffmpeg command with a progress bar."
+```
+
+### Audio Segment Extraction (`segments.ipynb`)
+
+> Extract temporal segments from audio files via ffmpeg stream-copy.
+
+#### Import
+
+``` python
+from cjm_media_plugin_ffmpeg.utils.segments import (
+    extract_audio_segment
+)
+```
+
+#### Functions
+
+``` python
+def extract_audio_segment(input_path: Path,  # Path to the input audio file
+                          output_path: Path,  # Path where the extracted segment is saved
+                          start_time: str,  # Start time as "HH:MM:SS" or seconds
+                          duration: str,  # Duration as "HH:MM:SS" or seconds
+                          verbose: bool = False,  # If True, shows verbose ffmpeg output
+                          pbar: bool = False,  # If True, shows a progress bar
+                          copy_codec: bool = True,  # Stream-copy without re-encoding (fast)
+                        ) -> None:  # Raises subprocess.CalledProcessError if extraction fails
+    "Extract a temporal segment from an audio file."
 ```
