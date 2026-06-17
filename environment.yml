@@ -7,11 +7,11 @@ dependencies:
   - ffmpeg
   - pip
   - pip:
-    # Core Infrastructure
-    - cjm-plugin-system
+    # Core Infrastructure: the substrate is AUTO-INJECTED by install-all (schema v2),
+    # so it is NOT listed here (listing it pre-empts --substrate-source).
 
-    # Tier 2 Interface
-    - cjm-media-plugin-system
+    # Result DTOs (the data nouns this pure-compute tool returns).
+    - cjm-capability-primitives
 
     # Utilities
     - fastcore

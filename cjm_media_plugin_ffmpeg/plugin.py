@@ -11,54 +11,53 @@ __all__ = ['FFmpegPluginConfig', 'FFmpegProcessingPlugin']
 import json
 import logging
 import os
-import shutil
 import subprocess
-import time
-from cjm_plugin_system.core.errors import PluginInputError
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from cjm_media_plugin_system.processing_interface import MediaProcessingPlugin
-from cjm_media_plugin_system.core import MediaMetadata
-from cjm_media_plugin_system.storage import MediaProcessingStorage
-
-from cjm_plugin_system.utils.hashing import hash_file, hash_dict_canonical
-from cjm_plugin_system.utils.cache_paths import cache_dir_for_config
+from cjm_plugin_system.core.capability import ToolCapability
+from cjm_plugin_system.core.errors import PluginInputError
 from cjm_plugin_system.utils.validation import (
     dict_to_config, config_to_dict, dataclass_to_jsonschema,
     SCHEMA_TITLE, SCHEMA_DESC, SCHEMA_ENUM
 )
 
-# FFmpeg helpers (lifted from the retired cjm-ffmpeg-utils into this plugin's utils/ sub-package)
+# Stage 8 (Option C / PILLAR 1c): the tool re-bases onto ToolCapability (pure
+# compute). The cache/persist bookends + the (action,input,config)->output_dir
+# choice moved OUT to the generic media-processing adapter
+# (cjm-media-processing-adapter-interface); the result DTOs live in
+# cjm-capability-primitives. No get_plugin_metadata, no self.storage, no in-tool
+# cache_dir_for_config/hashing. The adapter tells each artifact op WHERE to write.
+from cjm_capability_primitives.media_processing import (
+    MediaArtifactResult, MediaSegmentationResult, MediaSegment, MediaMetadata,
+)
+
+# FFmpeg helpers (lifted from the retired cjm-ffmpeg-utils into this plugin's utils/).
+# Absolute intra-package imports in the NOTEBOOK source — nbdev relativizes them
+# in the generated .py (nbdev rejects source-level relative imports; stage-8 L7).
 from .utils.availability import FFMPEG_AVAILABLE
 from .utils.codec import get_audio_codec
 from .utils.probe import get_media_duration
 from .utils.segments import extract_audio_segment
 from .utils.progress import run_ffmpeg_with_progress
 
-from .meta import get_plugin_metadata
-from cjm_plugin_system.core.interface import plugin_action, collect_plugin_actions
-
 # %% ../nbs/plugin.ipynb #8df3995a
 @dataclass
 class FFmpegPluginConfig:
-    """Configuration for the FFmpeg processing plugin."""
+    """Configuration for the FFmpeg processing tool (the HOW knobs only).
 
-    output_dir: Optional[str] = field(
-        default=None,
-        metadata={
-            SCHEMA_TITLE: "Output Directory",
-            SCHEMA_DESC: "Default output directory for processed files. Uses plugin data_dir if None."
-        }
-    )
+    Per-call WHAT-to-produce params (output_format / sample_rate / channels /
+    boundaries) are method arguments the adapter hashes into the cache key, NOT
+    config — only the quality/engine knobs live here. (The fused-era `output_dir`
+    config field is gone: the adapter chooses the output location, stage-8 L6.)"""
 
     default_audio_format: str = field(
         default="mp3",
         metadata={
             SCHEMA_TITLE: "Default Audio Format",
-            SCHEMA_DESC: "Default format for audio extraction and conversion.",
+            SCHEMA_DESC: "Fallback format for audio extraction when the source codec has no clean container mapping.",
             SCHEMA_ENUM: ["mp3", "wav", "flac", "aac", "ogg", "m4a"]
         }
     )
@@ -67,7 +66,7 @@ class FFmpegPluginConfig:
         default="192k",
         metadata={
             SCHEMA_TITLE: "Default Audio Bitrate",
-            SCHEMA_DESC: "Default bitrate for audio encoding operations.",
+            SCHEMA_DESC: "Bitrate for audio encoding operations (a quality knob; in the adapter cache key via get_current_config).",
             SCHEMA_ENUM: ["128k", "192k", "256k", "320k"]
         }
     )
@@ -76,7 +75,7 @@ class FFmpegPluginConfig:
         default=True,
         metadata={
             SCHEMA_TITLE: "Prefer Stream Copy",
-            SCHEMA_DESC: "When possible, copy audio stream without re-encoding (faster, lossless)."
+            SCHEMA_DESC: "When possible, copy the audio stream without re-encoding (faster, lossless)."
         }
     )
 
@@ -90,41 +89,52 @@ class FFmpegPluginConfig:
     )
 
 # %% ../nbs/plugin.ipynb #5a61a955
-class FFmpegProcessingPlugin(MediaProcessingPlugin):
-    """FFmpeg-based media processing plugin."""
+class FFmpegProcessingPlugin(ToolCapability):
+    """FFmpeg-based media-processing tool capability (stage 8: pure compute).
+
+    Native-surface model (PILLAR 1c): PURE COMPUTE. The artifact ops
+    (`convert`/`segment_audio`/`extract_audio`) read input, run ffmpeg, and WRITE
+    file(s) into the adapter-supplied `output_dir`, returning typed DTOs;
+    `get_info` probes and returns `MediaMetadata`. The cache-check +
+    output-location choice + persistence live in the generic media-processing
+    adapter (cjm-media-processing-adapter-interface); result DTOs live in
+    cjm-capability-primitives; identity derives from the installed distribution.
+    No `get_plugin_metadata`, no `self.storage`, no in-tool cache, no
+    `execute`/`@plugin_action` dispatcher (the task channel routes by method).
+
+    Config = the HOW knobs (resampler engine, bitrate, stream-copy preference,
+    fallback format); the per-call output_format/sample_rate/channels/boundaries
+    are WHAT-to-produce request params the adapter hashes into the cache key.
+    The fused-era `extract_segment` action was DROPPED (no consumer; the HITL
+    audio-chunk read is a future in-memory op, a different shape)."""
 
     config_class = FFmpegPluginConfig
 
     def __init__(self):
-        """Initialize the FFmpeg processing plugin."""
+        """Initialize the FFmpeg processing tool."""
         self.logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
         self.config: Optional[FFmpegPluginConfig] = None
-        self.storage: Optional[MediaProcessingStorage] = None
-        self._data_dir: Optional[str] = None
 
     @property
-    def name(self) -> str:  # Plugin identifier
-        return get_plugin_metadata()["name"]
+    def name(self) -> str:  # Tool identity, derived from the installed distribution (PILLAR 1c)
+        from importlib.metadata import metadata, packages_distributions
+        dist = (packages_distributions().get(__package__) or [__package__.replace("_", "-")])[0]
+        return metadata(dist)["Name"]
 
     @property
-    def version(self) -> str:  # Plugin version
-        return get_plugin_metadata()["version"]
+    def version(self) -> str:  # Tool version
+        from cjm_media_plugin_ffmpeg import __version__
+        return __version__
 
-    @property
-    def supported_media_types(self) -> List[str]:  # Supported input types
-        return ["audio", "video"]
-
-    def initialize(self, config: Optional[Any] = None) -> None:
-        """Initialize plugin with configuration."""
+    def initialize(self,
+                   config: Optional[Any] = None,  # Configuration dict or None for defaults
+                  ) -> None:
+        """First-time setup. No storage init — the adapter owns the cache (stage 8)."""
         self.config = dict_to_config(FFmpegPluginConfig, config or {})
-        meta = get_plugin_metadata()
-        db_path = meta["db_path"]
-        self._data_dir = os.path.dirname(db_path)
-        self.storage = MediaProcessingStorage(db_path)
-        self.logger.info(f"Initialized FFmpeg plugin (format={self.config.default_audio_format})")
+        self.logger.info(f"Initialized FFmpeg tool (format={self.config.default_audio_format})")
 
     def get_config_schema(self) -> Dict[str, Any]:  # JSON Schema for UI form generation
-        """Return the JSON Schema for plugin configuration."""
+        """Return the JSON Schema for tool configuration."""
         return dataclass_to_jsonschema(FFmpegPluginConfig)
 
     def get_current_config(self) -> Dict[str, Any]:  # Current config as dict
@@ -136,60 +146,8 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
         return FFMPEG_AVAILABLE
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Private helper
     # ------------------------------------------------------------------
-
-    def _get_output_dir(self,
-                        output_dir: Optional[str] = None,  # Explicit output dir override
-                        subdirectory: Optional[str] = None,  # Subdirectory within output dir
-                       ) -> str:  # Resolved output directory path
-        """Resolve the output directory, creating it if needed."""
-        base = output_dir or self.config.output_dir or self._data_dir
-        if subdirectory:
-            base = os.path.join(base, subdirectory)
-        os.makedirs(base, exist_ok=True)
-        return base
-
-    def _store_job(self,
-                   action: str,  # Action name
-                   input_path: str,  # Source file path
-                   output_path: str,  # Output file path
-                   parameters: Optional[Dict[str, Any]] = None,  # Action parameters
-                   metadata: Optional[Dict[str, Any]] = None,  # Additional metadata
-                   input_hash: Optional[str] = None,  # Pre-computed input hash (avoids re-hashing)
-                   config_hash: str = "",  # Cache key over the action's parameters
-                  ) -> str:  # Generated job_id
-        """Hash input/output files and store a processing job record (upsert by
-        action + input_path + config_hash; logs + swallows save failures)."""
-        job_id = str(uuid.uuid4())
-        if input_hash is None:
-            input_hash = hash_file(input_path)
-        output_hash = hash_file(output_path)
-        self.storage.save_with_logging(
-            job_id=job_id, action=action,
-            input_path=input_path, input_hash=input_hash, config_hash=config_hash,
-            output_path=output_path, output_hash=output_hash,
-            parameters=parameters, metadata=metadata, logger=self.logger,
-        )
-        return job_id
-
-    def _cache_paths(self,
-                     action: str,  # Action name (cache key component)
-                     input_path: str,  # Source file path
-                     parameters: Dict[str, Any],  # Action parameters (cache key component)
-                    ):  # -> (input_hash, config_hash, cached_output_or_None, output_dir)
-        """Layer B+C cache helpers for an output-producing action.
-
-        Returns the input content hash, the parameters' config hash, the cached
-        output path if a prior run for (action, input_path, input_hash, config_hash)
-        exists AND its file is still present, and a content+config-keyed output
-        directory (so runs with different parameters never collide on disk)."""
-        input_hash = hash_file(input_path)
-        config_hash = hash_dict_canonical(parameters)
-        cached = self.storage.get_cached(action, str(input_path), input_hash, config_hash)
-        cached_out = cached.output_path if (cached and os.path.exists(cached.output_path)) else None
-        out_dir = str(cache_dir_for_config(Path(self._data_dir), Path(input_path), action, parameters))
-        return input_hash, config_hash, cached_out, out_dir
 
     def _detect_audio_codec(self,
                             file_path: str,  # Path to media file
@@ -210,61 +168,18 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             return None
 
     # ------------------------------------------------------------------
-    # Action dispatch
-    # ------------------------------------------------------------------
-
-    def execute(self,
-                action: str = "get_info",  # Action to perform
-                **kwargs
-               ) -> Dict[str, Any]:  # Action result
-        """Dispatch to the `@plugin_action`-tagged handler for `action` (SG-44)."""
-        return self.dispatch_to_action(action, **kwargs)
-
-    @plugin_action("get_info")
-    def _action_get_info(self, **kwargs) -> Dict[str, Any]:
-        """Action wrapper -> get_info()."""
-        return self.get_info(kwargs["file_path"]).to_dict()
-
-    @plugin_action("convert")
-    def _action_convert(self, **kwargs) -> Dict[str, Any]:
-        """Action wrapper -> convert() (extract positional args, wrap path)."""
-        output = self.convert(kwargs["input_path"], kwargs["output_format"], **{
-            k: v for k, v in kwargs.items() if k not in ("input_path", "output_format")
-        })
-        return {"output_path": output}
-
-    @plugin_action("extract_segment")
-    def _action_extract_segment(self, **kwargs) -> Dict[str, Any]:
-        """Action wrapper -> extract_segment() (wrap path)."""
-        output = self.extract_segment(
-            kwargs["input_path"], kwargs["start"], kwargs["end"],
-            kwargs.get("output_path"),
-        )
-        return {"output_path": output}
-
-    @plugin_action("extract_audio")
-    def _action_extract_audio(self, **kwargs) -> Dict[str, Any]:
-        """Action wrapper -> _extract_audio()."""
-        return self._extract_audio(**kwargs)
-
-    @plugin_action("segment_audio")
-    def _action_segment_audio(self, **kwargs) -> Dict[str, Any]:
-        """Action wrapper -> _segment_audio()."""
-        return self._segment_audio(**kwargs)
-
-    # ------------------------------------------------------------------
-    # Core actions
+    # Pure-compute probe (uncached)
     # ------------------------------------------------------------------
 
     def get_info(self,
                  file_path: Union[str, Path],  # Path to media file
                 ) -> MediaMetadata:  # Probed metadata
-        """Get metadata for a media file via ffprobe."""
+        """Probe metadata for a media file via ffprobe (UNCACHED pure-query)."""
         file_path = str(file_path)
         if not os.path.exists(file_path):
-            raise PluginInputError(  # SG-47: missing input file (multi-inherits FileNotFoundError via PluginInputError ValueError MRO chain? No — explicit FileNotFoundError preserved)
-            f"File not found: {file_path}", fields_invalid=["file_path"],
-        )
+            raise PluginInputError(  # SG-47: missing input file
+                f"File not found: {file_path}", fields_invalid=["file_path"],
+            )
 
         cmd = [
             'ffprobe', '-v', 'quiet',
@@ -308,47 +223,46 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             audio_streams=audio_streams,
         )
 
+    # ------------------------------------------------------------------
+    # Pure-compute artifact ops (write into the adapter-supplied output_dir)
+    # ------------------------------------------------------------------
+
     def convert(self,
-                input_path: Union[str, Path],  # Source file path
-                output_format: str,  # Target format (e.g. 'mp3', 'wav')
-                **kwargs
-               ) -> str:  # Output file path
-        """Convert media to a different format."""
+                input_path: Union[str, Path],     # Source (or upstream artifact) media to convert
+                output_dir: str,                  # Adapter-chosen dir to write the artifact into
+                output_format: str,               # Target audio format (e.g. 'wav', 'mp3')
+                sample_rate: Optional[int] = None,  # Target sample rate (e.g. 16000); None = source rate
+                channels: Optional[int] = None,     # Target channel count (e.g. 1 = mono); None = source
+                **kwargs                          # Provenance pass-through (unused by compute)
+               ) -> MediaArtifactResult:  # The produced converted-audio artifact
+        """Convert media to target/model-ready audio — PURE COMPUTE.
+
+        Writes `<output_dir>/<stem>.<output_format>` and returns its pointer. The
+        quality knobs (bitrate, resampler) come from `self.config`; the shape
+        params (format/rate/channels) are the per-call request (the adapter hashes
+        them into the cache key)."""
         input_path = str(input_path)
         if not os.path.exists(input_path):
             raise PluginInputError(  # SG-47: missing input file
-            f"File not found: {input_path}", fields_invalid=["input_path"],
-        )
+                f"File not found: {input_path}", fields_invalid=["input_path"],
+            )
 
-        bitrate = kwargs.get('bitrate', self.config.default_audio_bitrate)
-        sample_rate = kwargs.get('sample_rate')
-        channels = kwargs.get('channels')
-        resampler = kwargs.get('resampler', self.config.resampler)
-        parameters = {"output_format": output_format, "bitrate": bitrate,
-                      "sample_rate": sample_rate, "channels": channels,
-                      "resampler": resampler}
+        bitrate = self.config.default_audio_bitrate
+        resampler = self.config.resampler
 
-        # Layer B+C cache: skip the re-encode if this (input, params) was already done.
-        input_hash, config_hash, cached_out, out_dir = self._cache_paths("convert", input_path, parameters)
-        if cached_out is not None:
-            self.logger.info(f"Using cached convert output: {cached_out}")
-            return cached_out
-
+        os.makedirs(output_dir, exist_ok=True)
         stem = Path(input_path).stem
-        output_path = os.path.join(out_dir, f"{stem}.{output_format}")
+        output_path = os.path.join(output_dir, f"{stem}.{output_format}")
 
         total_duration = get_media_duration(Path(input_path))
         codec = get_audio_codec(output_format)
 
-        cmd = ['ffmpeg', '-i', input_path, '-vn']
-        cmd.extend(['-acodec', codec])
+        cmd = ['ffmpeg', '-i', input_path, '-vn', '-acodec', codec]
         if bitrate:
             cmd.extend(['-b:a', bitrate])
         if sample_rate:
             # Resample with the configured engine (soxr by default — libsoxr at HQ
-            # precision, matching librosa's soxr_hq; higher quality than ffmpeg's
-            # swr default, standardizing ALL ffmpeg-processed input on the cleaner
-            # resampler). `resampler` is in the cache-key parameters above.
+            # precision, matching librosa's soxr_hq), standardizing model-ready input.
             if resampler:
                 cmd.extend(['-af', f'aresample=resampler={resampler}:precision=20'])
             cmd.extend(['-ar', str(sample_rate)])
@@ -361,91 +275,106 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             cmd=cmd, total_duration=total_duration,
             description=f"Converting to {output_format}"
         )
-
-        job_id = self._store_job(
-            action="convert", input_path=input_path, output_path=output_path,
-            parameters=parameters, metadata={"duration": total_duration},
-            input_hash=input_hash, config_hash=config_hash,
-        )
         self.report_progress(1.0, "Complete")
-        self.logger.info(f"Converted {input_path} -> {output_path} (job={job_id})")
-        return output_path
+        self.logger.info(f"Converted {input_path} -> {output_path}")
 
-    def extract_segment(self,
-                        input_path: Union[str, Path],  # Source audio file
-                        start: float,  # Start time in seconds
-                        end: float,  # End time in seconds
-                        output_path: Optional[str] = None,  # Custom output path
-                       ) -> str:  # Output file path
-        """Extract a temporal segment from a media file."""
+        return MediaArtifactResult(output_path=output_path, metadata={
+            "output_format": output_format, "sample_rate": sample_rate, "channels": channels,
+            "resampler": resampler, "bitrate": bitrate, "duration": total_duration,
+        })
+
+    def segment_audio(self,
+                      input_path: Union[str, Path],         # Source audio to cut
+                      output_dir: str,                      # Adapter-chosen dir to write the segments into
+                      boundaries: List[Dict[str, float]],   # [{"start", "end"}, ...]
+                      output_format: Optional[str] = None,  # Output format (default: same as input)
+                      filename_template: str = "segment_{index:03d}",  # Per-segment filename pattern
+                      **kwargs                              # Provenance pass-through (unused by compute)
+                     ) -> MediaSegmentationResult:  # The produced batch of segment files
+        """Split an audio file into segments at the given boundaries — PURE COMPUTE.
+
+        Writes one file per boundary into `output_dir` and returns the typed batch
+        result. Batch-level caching is the adapter's concern (one row per
+        (input, boundaries+format config); the per-segment resume-skip the fused
+        tool did is intentionally not reproduced)."""
         input_path = str(input_path)
         if not os.path.exists(input_path):
             raise PluginInputError(  # SG-47: missing input file
-            f"File not found: {input_path}", fields_invalid=["input_path"],
-        )
-
-        duration = end - start
-        if duration <= 0:
+                f"File not found: {input_path}", fields_invalid=["input_path"],
+            )
+        if not boundaries:
             raise PluginInputError(  # SG-47: typed input-validation
-            f"end ({end}) must be greater than start ({start})", fields_invalid=["start", "end"],
+                "boundaries list must not be empty", fields_invalid=["boundaries"],
+            )
+        # Validate boundaries are sorted and non-overlapping.
+        for i, b in enumerate(boundaries):
+            if b["end"] <= b["start"]:
+                raise PluginInputError(
+                    f"Boundary {i}: end ({b['end']}) must be > start ({b['start']})",
+                    fields_invalid=["boundaries"],
+                )
+            if i > 0 and b["start"] < boundaries[i - 1]["end"]:
+                raise PluginInputError(
+                    f"Boundary {i} start ({b['start']}) overlaps boundary {i-1} end ({boundaries[i-1]['end']})",
+                    fields_invalid=["boundaries"],
+                )
+
+        ext = output_format or Path(input_path).suffix.lstrip('.')
+        os.makedirs(output_dir, exist_ok=True)
+        batch_key = str(uuid.uuid4())
+        total = len(boundaries)
+
+        segments: List[MediaSegment] = []
+        for i, boundary in enumerate(boundaries):
+            start = boundary["start"]
+            end = boundary["end"]
+            duration = end - start
+            filename = f"{filename_template.format(index=i)}.{ext}"
+            output_path = os.path.join(output_dir, filename)
+            extract_audio_segment(
+                input_path=Path(input_path),
+                output_path=Path(output_path),
+                start_time=str(start),
+                duration=str(duration),
+            )
+            segments.append(MediaSegment(
+                index=i, output_path=output_path, start=start, end=end, duration=duration,
+            ))
+            self.report_progress((i + 1) / total, f"Segment {i + 1}/{total}")
+
+        total_duration = sum(s.duration for s in segments)
+        self.report_progress(1.0, f"Complete: {total} segments")
+        self.logger.info(f"Segmented {input_path} into {total} segments (batch_key={batch_key})")
+
+        return MediaSegmentationResult(
+            segments=segments, input_path=input_path, segment_count=total,
+            total_duration=total_duration, batch_key=batch_key,
         )
 
-        parameters = {"start": start, "end": end, "duration": duration}
-        input_hash, config_hash, cached_out, out_dir = self._cache_paths("extract_segment", input_path, parameters)
+    def extract_audio(self,
+                      input_path: Union[str, Path],         # Source video container
+                      output_dir: str,                      # Adapter-chosen dir to write the artifact into
+                      output_format: Optional[str] = None,  # Audio format (default: from codec detection)
+                      **kwargs                              # Provenance pass-through (unused by compute)
+                     ) -> MediaArtifactResult:  # The produced extracted-audio artifact
+        """Extract the audio stream from a video container — PURE COMPUTE.
 
-        if output_path is None:
-            if cached_out is not None:
-                self.logger.info(f"Using cached segment output: {cached_out}")
-                return cached_out
-            ext = Path(input_path).suffix
-            stem = Path(input_path).stem
-            output_path = os.path.join(out_dir, f"{stem}_{start:.2f}_{end:.2f}{ext}")
-
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        extract_audio_segment(
-            input_path=Path(input_path),
-            output_path=Path(output_path),
-            start_time=str(start),
-            duration=str(duration),
-        )
-
-        job_id = self._store_job(
-            action="extract_segment", input_path=input_path, output_path=output_path,
-            parameters=parameters, input_hash=input_hash, config_hash=config_hash,
-        )
-        self.logger.info(f"Extracted segment [{start:.2f}-{end:.2f}] -> {output_path} (job={job_id})")
-        return output_path
-
-    # ------------------------------------------------------------------
-    # Custom actions
-    # ------------------------------------------------------------------
-
-    def _extract_audio(self,
-                       input_path: str,  # Path to video file
-                       output_format: Optional[str] = None,  # Audio format (default: from codec detection)
-                       output_dir: Optional[str] = None,  # Output directory override
-                      ) -> Dict[str, Any]:  # Extraction result with output_path, job_id, duration, codec
-        """Extract audio stream from a video file."""
+        Stream-copies when the source codec maps cleanly (lossless, fast),
+        otherwise re-encodes to the resolved format. Writes into `output_dir`."""
         input_path = str(input_path)
         if not os.path.exists(input_path):
             raise PluginInputError(  # SG-47: missing input file
-            f"File not found: {input_path}", fields_invalid=["input_path"],
-        )
+                f"File not found: {input_path}", fields_invalid=["input_path"],
+            )
 
-        self.report_progress(0.0, "Probing video file...")
-
-        # Detect audio codec
         codec = self._detect_audio_codec(input_path)
         if not codec:
             raise PluginInputError(  # SG-47: input file has no audio stream
-            f"No audio stream found in: {input_path}", fields_invalid=["input_path"],
-        )
+                f"No audio stream found in: {input_path}", fields_invalid=["input_path"],
+            )
 
-        # Determine output format and whether to stream copy
         stream_copy = self.config.prefer_stream_copy
         if output_format is None:
-            # Map codec to file extension for stream copy
             codec_ext_map = {
                 'aac': 'm4a', 'mp3': 'mp3', 'vorbis': 'ogg', 'opus': 'ogg',
                 'flac': 'flac', 'pcm_s16le': 'wav', 'pcm_s24le': 'wav',
@@ -454,37 +383,20 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             if codec not in codec_ext_map:
                 stream_copy = False
         else:
-            # User specified format — check if codec matches
             expected_codec = get_audio_codec(output_format)
             if expected_codec != 'copy' and expected_codec != codec:
                 stream_copy = False
 
+        os.makedirs(output_dir, exist_ok=True)
         stem = Path(input_path).stem
-        parameters = {"output_format": output_format, "stream_copy": stream_copy}
-
-        # Layer B+C cache (params are the effective format + stream_copy, derived above).
-        input_hash, config_hash, cached_out, out_dir = self._cache_paths("extract_audio", input_path, parameters)
-        if cached_out is not None:
-            cached = self.storage.get_cached("extract_audio", str(input_path), input_hash, config_hash)
-            meta = cached.metadata or {}
-            self.logger.info(f"Using cached extracted audio: {cached_out}")
-            return {
-                "job_id": cached.job_id, "output_path": cached_out, "input_path": input_path,
-                "duration": meta.get("duration"), "codec": meta.get("codec", codec),
-                "stream_copy": stream_copy,
-            }
-
-        output_path = os.path.join(out_dir, f"{stem}.{output_format}")
-
+        output_path = os.path.join(output_dir, f"{stem}.{output_format}")
         total_duration = get_media_duration(Path(input_path))
 
-        # Build ffmpeg command
         cmd = ['ffmpeg', '-i', input_path, '-vn']
         if stream_copy:
             cmd.extend(['-acodec', 'copy'])
         else:
-            target_codec = get_audio_codec(output_format)
-            cmd.extend(['-acodec', target_codec])
+            cmd.extend(['-acodec', get_audio_codec(output_format)])
             cmd.extend(['-b:a', self.config.default_audio_bitrate])
         cmd.extend(['-progress', 'pipe:2', '-y', output_path])
 
@@ -493,122 +405,10 @@ class FFmpegProcessingPlugin(MediaProcessingPlugin):
             cmd=cmd, total_duration=total_duration,
             description="Extracting audio"
         )
-
-        self.report_progress(0.9, "Hashing output file...")
-        job_id = self._store_job(
-            action="extract_audio", input_path=input_path, output_path=output_path,
-            parameters=parameters,
-            metadata={"codec": codec, "duration": total_duration,
-                       "source_video_path": input_path},
-            input_hash=input_hash, config_hash=config_hash,
-        )
-
         self.report_progress(1.0, "Complete")
-        self.logger.info(f"Extracted audio {input_path} -> {output_path} (stream_copy={stream_copy}, job={job_id})")
+        self.logger.info(f"Extracted audio {input_path} -> {output_path} (stream_copy={stream_copy})")
 
-        return {
-            "job_id": job_id,
-            "output_path": output_path,
-            "input_path": input_path,
-            "duration": total_duration,
-            "codec": codec,
-            "stream_copy": stream_copy,
-        }
-
-    def _segment_audio(self,
-                       input_path: str,  # Source audio file
-                       boundaries: List[Dict[str, float]],  # List of {"start": float, "end": float}
-                       output_dir: Optional[str] = None,  # Output directory override
-                       output_format: Optional[str] = None,  # Output format (default: same as input)
-                       filename_template: str = "segment_{index:03d}",  # Filename pattern
-                      ) -> Dict[str, Any]:  # Segmentation result with segments list
-        """Split audio file into segments at specified boundaries."""
-        input_path = str(input_path)
-        if not os.path.exists(input_path):
-            raise PluginInputError(  # SG-47: missing input file
-            f"File not found: {input_path}", fields_invalid=["input_path"],
-        )
-
-        if not boundaries:
-            raise ValueError("boundaries list must not be empty")
-
-        # Validate boundaries are sorted and non-overlapping
-        for i, b in enumerate(boundaries):
-            if b["end"] <= b["start"]:
-                raise ValueError(f"Boundary {i}: end ({b['end']}) must be > start ({b['start']})")
-            if i > 0 and b["start"] < boundaries[i - 1]["end"]:
-                raise ValueError(
-                    f"Boundary {i} start ({b['start']}) overlaps with boundary {i-1} end ({boundaries[i-1]['end']})"
-                )
-
-        ext = output_format or Path(input_path).suffix.lstrip('.')
-        batch_key = str(uuid.uuid4())
-        total = len(boundaries)
-
-        # Layer B: content+config-keyed batch directory (keyed on boundaries + format
-        # + template), so re-segmenting with DIFFERENT boundaries never overwrites a
-        # prior batch's files. Hashes the input once (reused per segment).
-        batch_params = {"boundaries": boundaries, "output_format": ext,
-                        "filename_template": filename_template}
-        self.report_progress(0.0, "Hashing input file...")
-        cached_input_hash, _, _, out_dir = self._cache_paths("segment_audio", input_path, batch_params)
-        if output_dir is not None:
-            out_dir = os.path.join(output_dir, "segments", Path(input_path).stem)
-        os.makedirs(out_dir, exist_ok=True)
-
-        segments = []
-        for i, boundary in enumerate(boundaries):
-            start = boundary["start"]
-            end = boundary["end"]
-            duration = end - start
-
-            filename = f"{filename_template.format(index=i)}.{ext}"
-            output_path = os.path.join(out_dir, filename)
-            seg_config_hash = hash_dict_canonical({"start": start, "end": end, "index": i, "output_format": ext})
-
-            # Per-segment Layer C skip: reuse an identical segment already on disk.
-            seg_cached = self.storage.get_cached("segment_audio", str(input_path), cached_input_hash, seg_config_hash)
-            if seg_cached is not None and os.path.exists(seg_cached.output_path):
-                output_path = seg_cached.output_path
-                job_id = seg_cached.job_id
-            else:
-                extract_audio_segment(
-                    input_path=Path(input_path),
-                    output_path=Path(output_path),
-                    start_time=str(start),
-                    duration=str(duration),
-                )
-                job_id = self._store_job(
-                    action="segment_audio", input_path=input_path, output_path=output_path,
-                    parameters={"start": start, "end": end, "index": i},
-                    metadata={"source_audio": input_path, "segment_count": total,
-                               "filename_template": filename_template},
-                    input_hash=cached_input_hash, config_hash=seg_config_hash,
-                )
-
-            segments.append({
-                "job_id": job_id,
-                "index": i,
-                "output_path": output_path,
-                "start": start,
-                "end": end,
-                "duration": duration,
-            })
-
-            self.report_progress((i + 1) / total, f"Segment {i + 1}/{total}")
-
-        total_duration = sum(s["duration"] for s in segments)
-        self.report_progress(1.0, f"Complete: {total} segments")
-        self.logger.info(f"Segmented {input_path} into {total} segments (batch_key={batch_key})")
-
-        return {
-            "segments": segments,
-            "input_path": input_path,
-            "segment_count": total,
-            "total_duration": total_duration,
-            "batch_key": batch_key,
-        }
-
-
-FFmpegProcessingPlugin.supported_actions = collect_plugin_actions(FFmpegProcessingPlugin)
-
+        return MediaArtifactResult(output_path=output_path, metadata={
+            "codec": codec, "duration": total_duration, "output_format": output_format,
+            "stream_copy": stream_copy, "source_video_path": input_path,
+        })
