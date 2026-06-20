@@ -1,4 +1,4 @@
-name: cjm-media-plugin-ffmpeg
+name: cjm-capability-ffmpeg
 channels:
   - conda-forge
   - defaults

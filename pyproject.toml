@@ -3,28 +3,28 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cjm-media-plugin-ffmpeg"
+name = "cjm-capability-ffmpeg"
 dynamic = ["version"]
-description = "FFmpeg-based media processing plugin for the cjm-plugin-system that provides audio extraction, segmentation, format conversion, and segment extraction."
+description = "An FFmpeg-based media-processing capability for the cjm-substrate runtime that provides audio extraction, segmentation, and format conversion."
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 authors = [{name = "Christian J. Mills", email = "9126128+cj-mills@users.noreply.github.com"}]
 keywords = ['nbdev', 'jupyter', 'notebook', 'python']
 classifiers = ["Natural Language :: English", "Intended Audience :: Developers", "Development Status :: 3 - Alpha", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3 :: Only"]
-dependencies = ['cjm_plugin_system>=0.0.46', 'cjm_capability_primitives>=0.0.8', 'tqdm']
+dependencies = ['cjm-substrate>=0.0.50', 'cjm-capability-primitives>=0.0.9', 'tqdm']
 
 [project.urls]
-Repository = "https://github.com/cj-mills/cjm-media-plugin-ffmpeg"
-Documentation = "https://cj-mills.github.io/cjm-media-plugin-ffmpeg"
+Repository = "https://github.com/cj-mills/cjm-capability-ffmpeg"
+Documentation = "https://cj-mills.github.io/cjm-capability-ffmpeg"
 
 [project.entry-points.nbdev]
-cjm_media_plugin_ffmpeg = "cjm_media_plugin_ffmpeg._modidx:d"
+cjm_capability_ffmpeg = "cjm_capability_ffmpeg._modidx:d"
 
 [tool.setuptools.dynamic]
-version = {attr = "cjm_media_plugin_ffmpeg.__version__"}
+version = {attr = "cjm_capability_ffmpeg.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["cjm_media_plugin_ffmpeg*"]
+include = ["cjm_capability_ffmpeg*"]
 
 [tool.nbdev]
