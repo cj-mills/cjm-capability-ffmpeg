@@ -1,0 +1,137 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "cjm-capability-ffmpeg",
+    "section": "",
+    "text": "pip install cjm_capability_ffmpeg",
+    "crumbs": [
+      "cjm-capability-ffmpeg"
+    ]
+  },
+  {
+    "objectID": "index.html#install",
+    "href": "index.html#install",
+    "title": "cjm-capability-ffmpeg",
+    "section": "",
+    "text": "pip install cjm_capability_ffmpeg",
+    "crumbs": [
+      "cjm-capability-ffmpeg"
+    ]
+  },
+  {
+    "objectID": "index.html#project-structure",
+    "href": "index.html#project-structure",
+    "title": "cjm-capability-ffmpeg",
+    "section": "Project Structure",
+    "text": "Project Structure\nnbs/\n├── utils/ (5)\n│   ├── availability.ipynb  # Detect whether the `ffmpeg` binary is installed on this system.\n│   ├── codec.ipynb         # Map audio container formats to the ffmpeg codec used to encode them.\n│   ├── probe.ipynb         # Probe media files for metadata (duration, ...) via ffprobe.\n│   ├── progress.ipynb      # Run ffmpeg subprocess commands with a progress bar and optional callback.\n│   └── segments.ipynb      # Extract temporal segments from audio files via ffmpeg stream-copy.\n└── capability.ipynb  # FFmpeg-based media processing capability implementing the `MediaProcessingCapability` interface.\nTotal: 6 notebooks across 1 directory",
+    "crumbs": [
+      "cjm-capability-ffmpeg"
+    ]
+  },
+  {
+    "objectID": "index.html#module-dependencies",
+    "href": "index.html#module-dependencies",
+    "title": "cjm-capability-ffmpeg",
+    "section": "Module Dependencies",
+    "text": "Module Dependencies\ngraph LR\n    capability[\"capability&lt;br/&gt;FFmpeg Processing Capability\"]\n    utils_availability[\"utils.availability&lt;br/&gt;FFmpeg Availability\"]\n    utils_codec[\"utils.codec&lt;br/&gt;Audio Codec Map\"]\n    utils_probe[\"utils.probe&lt;br/&gt;Media Probing\"]\n    utils_progress[\"utils.progress&lt;br/&gt;FFmpeg Execution + Progress\"]\n    utils_segments[\"utils.segments&lt;br/&gt;Audio Segment Extraction\"]\n\n    capability --&gt; utils_probe\n    capability --&gt; utils_codec\n    capability --&gt; utils_progress\n    capability --&gt; utils_availability\n    capability --&gt; utils_segments\n    utils_segments --&gt; utils_progress\n6 cross-module dependencies detected",
+    "crumbs": [
+      "cjm-capability-ffmpeg"
+    ]
+  },
+  {
+    "objectID": "index.html#cli-reference",
+    "href": "index.html#cli-reference",
+    "title": "cjm-capability-ffmpeg",
+    "section": "CLI Reference",
+    "text": "CLI Reference\nNo CLI commands found in this project.",
+    "crumbs": [
+      "cjm-capability-ffmpeg"
+    ]
+  },
+  {
+    "objectID": "index.html#module-overview",
+    "href": "index.html#module-overview",
+    "title": "cjm-capability-ffmpeg",
+    "section": "Module Overview",
+    "text": "Module Overview\nDetailed documentation for each module in the project:\n\nFFmpeg Availability (availability.ipynb)\n\nDetect whether the ffmpeg binary is installed on this system.\n\n\nImport\nfrom cjm_capability_ffmpeg.utils.availability import (\n    FFMPEG_AVAILABLE\n)\n\n\nVariables\nFFMPEG_AVAILABLE\n\n\n\nFFmpeg Processing Capability (capability.ipynb)\n\nFFmpeg-based media processing capability implementing the MediaProcessingCapability interface.\n\n\nImport\nfrom cjm_capability_ffmpeg.capability import (\n    FFmpegCapabilityConfig,\n    FFmpegProcessingCapability\n)\n\n\nClasses\n@dataclass\nclass FFmpegCapabilityConfig:\n    \"\"\"\n    Configuration for the FFmpeg processing tool (the HOW knobs only).\n    \n    Per-call WHAT-to-produce params (output_format / sample_rate / channels /\n    boundaries) are method arguments the adapter hashes into the cache key, NOT\n    config — only the quality/engine knobs live here. (The fused-era `output_dir`\n    config field is gone: the adapter chooses the output location, stage-8 L6.)\n    \"\"\"\n    \n    default_audio_format: str = field(...)\n    default_audio_bitrate: str = field(...)\n    prefer_stream_copy: bool = field(...)\n    resampler: str = field(...)\nclass FFmpegProcessingCapability:\n    def __init__(self):\n        \"\"\"Initialize the FFmpeg processing tool.\"\"\"\n        self.logger = logging.getLogger(f\"{__name__}.{type(self).__name__}\")\n        self.config: Optional[FFmpegCapabilityConfig] = None\n    \"\"\"\n    FFmpeg-based media-processing tool capability (stage 8: pure compute).\n    \n    Native-surface model (PILLAR 1c): PURE COMPUTE. The artifact ops\n    (`convert`/`segment_audio`/`extract_audio`) read input, run ffmpeg, and WRITE\n    file(s) into the adapter-supplied `output_dir`, returning typed DTOs;\n    `get_info` probes and returns `MediaMetadata`. The cache-check +\n    output-location choice + persistence live in the generic media-processing\n    adapter (cjm-media-processing-adapter-interface); result DTOs live in\n    cjm-capability-primitives; identity derives from the installed distribution.\n    No `get_plugin_metadata`, no `self.storage`, no in-tool cache, no\n    `execute`/`@capability_action` dispatcher (the task channel routes by method).\n    \n    Config = the HOW knobs (resampler engine, bitrate, stream-copy preference,\n    fallback format); the per-call output_format/sample_rate/channels/boundaries\n    are WHAT-to-produce request params the adapter hashes into the cache key.\n    The fused-era `extract_segment` action was DROPPED (no consumer; the HITL\n    audio-chunk read is a future in-memory op, a different shape).\n    \"\"\"\n    \n    def __init__(self):\n            \"\"\"Initialize the FFmpeg processing tool.\"\"\"\n            self.logger = logging.getLogger(f\"{__name__}.{type(self).__name__}\")\n            self.config: Optional[FFmpegCapabilityConfig] = None\n        \"Initialize the FFmpeg processing tool.\"\n    \n    def name(self) -&gt; str:  # Tool identity, derived from the installed distribution (PILLAR 1c)\n            from importlib.metadata import metadata, packages_distributions\n            dist = (packages_distributions().get(__package__) or [__package__.replace(\"_\", \"-\")])[0]\n            return metadata(dist)[\"Name\"]\n    \n        @property\n        def version(self) -&gt; str:  # Tool version\n    \n    def version(self) -&gt; str:  # Tool version\n            from cjm_capability_ffmpeg import __version__\n            return __version__\n    \n        def initialize(self,\n                       config: Optional[Any] = None,  # Configuration dict or None for defaults\n                      ) -&gt; None\n    \n    def initialize(self,\n                       config: Optional[Any] = None,  # Configuration dict or None for defaults\n                      ) -&gt; None\n        \"First-time setup. No storage init — the adapter owns the cache (stage 8).\"\n    \n    def get_config_schema(self) -&gt; Dict[str, Any]:  # JSON Schema for UI form generation\n            \"\"\"Return the JSON Schema for tool configuration.\"\"\"\n            return dataclass_to_jsonschema(FFmpegCapabilityConfig)\n    \n        def get_current_config(self) -&gt; Dict[str, Any]:  # Current config as dict\n        \"Return the JSON Schema for tool configuration.\"\n    \n    def get_current_config(self) -&gt; Dict[str, Any]:  # Current config as dict\n            \"\"\"Return the current configuration as a dictionary.\"\"\"\n            return config_to_dict(self.config) if self.config else {}\n    \n        def is_available(self) -&gt; bool:  # Whether ffmpeg is installed\n        \"Return the current configuration as a dictionary.\"\n    \n    def is_available(self) -&gt; bool:  # Whether ffmpeg is installed\n            \"\"\"Check if ffmpeg is available on this system.\"\"\"\n            return FFMPEG_AVAILABLE\n    \n        # ------------------------------------------------------------------\n        # Private helper\n        # ------------------------------------------------------------------\n    \n        def _detect_audio_codec(self,\n                                file_path: str,  # Path to media file\n                               ) -&gt; Optional[str]:  # Audio codec name or None\n        \"Check if ffmpeg is available on this system.\"\n    \n    def get_info(self,\n                     file_path: Union[str, Path],  # Path to media file\n                    ) -&gt; MediaMetadata:  # Probed metadata\n        \"Probe metadata for a media file via ffprobe (UNCACHED pure-query).\"\n    \n    def convert(self,\n                    input_path: Union[str, Path],     # Source (or upstream artifact) media to convert\n                    output_dir: str,                  # Adapter-chosen dir to write the artifact into\n                    output_format: str,               # Target audio format (e.g. 'wav', 'mp3')\n                    sample_rate: Optional[int] = None,  # Target sample rate (e.g. 16000); None = source rate\n                    channels: Optional[int] = None,     # Target channel count (e.g. 1 = mono); None = source\n                    **kwargs                          # Provenance pass-through (unused by compute)\n                   ) -&gt; MediaArtifactResult:  # The produced converted-audio artifact\n        \"Convert media to target/model-ready audio — PURE COMPUTE.\n\nWrites `&lt;output_dir&gt;/&lt;stem&gt;.&lt;output_format&gt;` and returns its pointer. The\nquality knobs (bitrate, resampler) come from `self.config`; the shape\nparams (format/rate/channels) are the per-call request (the adapter hashes\nthem into the cache key).\"\n    \n    def segment_audio(self,\n                          input_path: Union[str, Path],         # Source audio to cut\n                          output_dir: str,                      # Adapter-chosen dir to write the segments into\n                          boundaries: List[Dict[str, float]],   # [{\"start\", \"end\"}, ...]\n                          output_format: Optional[str] = None,  # Output format (default: same as input)\n                          filename_template: str = \"segment_{index:03d}\",  # Per-segment filename pattern\n                          **kwargs                              # Provenance pass-through (unused by compute)\n                         ) -&gt; MediaSegmentationResult:  # The produced batch of segment files\n        \"Split an audio file into segments at the given boundaries — PURE COMPUTE.\n\nWrites one file per boundary into `output_dir` and returns the typed batch\nresult. Batch-level caching is the adapter's concern (one row per\n(input, boundaries+format config); the per-segment resume-skip the fused\ntool did is intentionally not reproduced).\"\n    \n    def extract_audio(self,\n                          input_path: Union[str, Path],         # Source video container\n                          output_dir: str,                      # Adapter-chosen dir to write the artifact into\n                          output_format: Optional[str] = None,  # Audio format (default: from codec detection)\n                          **kwargs                              # Provenance pass-through (unused by compute)\n                         ) -&gt; MediaArtifactResult:  # The produced extracted-audio artifact\n        \"Extract the audio stream from a video container — PURE COMPUTE.\n\nStream-copies when the source codec maps cleanly (lossless, fast),\notherwise re-encodes to the resolved format. Writes into `output_dir`.\"\n\n\n\nAudio Codec Map (codec.ipynb)\n\nMap audio container formats to the ffmpeg codec used to encode them.\n\n\nImport\nfrom cjm_capability_ffmpeg.utils.codec import (\n    get_audio_codec\n)\n\n\nFunctions\ndef get_audio_codec(audio_format: str  # The desired audio format (e.g. 'mp3', 'wav')\n                   ) -&gt; str:  # The ffmpeg audio codec name ('copy' if unknown)\n    \"Map an audio container format to the appropriate ffmpeg codec.\"\n\n\n\nMedia Probing (probe.ipynb)\n\nProbe media files for metadata (duration, …) via ffprobe.\n\n\nImport\nfrom cjm_capability_ffmpeg.utils.probe import (\n    get_media_duration\n)\n\n\nFunctions\ndef get_media_duration(file_path: Path  # Path to the media file\n                      ) -&gt; Optional[float]:  # Duration in seconds, or None if it cannot be determined\n    \"Get the duration of a media file (seconds) via ffprobe.\"\n\n\n\nFFmpeg Execution + Progress (progress.ipynb)\n\nRun ffmpeg subprocess commands with a progress bar and optional callback.\n\n\nImport\nfrom cjm_capability_ffmpeg.utils.progress import (\n    parse_progress_line,\n    run_ffmpeg_with_progress\n)\n\n\nFunctions\ndef parse_progress_line(line: str  # A line of stderr output from ffmpeg\n                        ) -&gt; Optional[float]:  # Current time in seconds, or None if the line has no progress info\n    \"Parse a progress line from ffmpeg stderr output.\"\ndef run_ffmpeg_with_progress(\n    cmd: List[str],  # The ffmpeg command and arguments\n    total_duration: Optional[float] = None,  # Total duration in seconds for a determinate bar, else indeterminate\n    description: str = \"Processing\",  # Description text for the progress bar\n    verbose: bool = False,  # If True, prints detailed ffmpeg output\n    progress_callback: Optional[Callable[[float], None]] = None  # Optional callback receiving current progress in seconds\n) -&gt; None:  # Raises FileNotFoundError or subprocess.CalledProcessError on failure\n    \"Run an ffmpeg command with a progress bar.\"\n\n\n\nAudio Segment Extraction (segments.ipynb)\n\nExtract temporal segments from audio files via ffmpeg stream-copy.\n\n\nImport\nfrom cjm_capability_ffmpeg.utils.segments import (\n    extract_audio_segment\n)\n\n\nFunctions\ndef extract_audio_segment(input_path: Path,  # Path to the input audio file\n                          output_path: Path,  # Path where the extracted segment is saved\n                          start_time: str,  # Start time as \"HH:MM:SS\" or seconds\n                          duration: str,  # Duration as \"HH:MM:SS\" or seconds\n                          verbose: bool = False,  # If True, shows verbose ffmpeg output\n                          pbar: bool = False,  # If True, shows a progress bar\n                          copy_codec: bool = True,  # Stream-copy without re-encoding (fast)\n                        ) -&gt; None:  # Raises subprocess.CalledProcessError if extraction fails\n    \"Extract a temporal segment from an audio file.\"",
+    "crumbs": [
+      "cjm-capability-ffmpeg"
+    ]
+  },
+  {
+    "objectID": "utils/availability.html",
+    "href": "utils/availability.html",
+    "title": "FFmpeg Availability",
+    "section": "",
+    "text": "assert isinstance(FFMPEG_AVAILABLE, bool)\nprint(f\"FFMPEG_AVAILABLE = {FFMPEG_AVAILABLE}\")",
+    "crumbs": [
+      "utils",
+      "FFmpeg Availability"
+    ]
+  },
+  {
+    "objectID": "utils/progress.html",
+    "href": "utils/progress.html",
+    "title": "FFmpeg Execution + Progress",
+    "section": "",
+    "text": "run_ffmpeg_with_progress\n\ndef run_ffmpeg_with_progress(\n    cmd:List, # The ffmpeg command and arguments\n    total_duration:Optional=None, # Total duration in seconds for a determinate bar, else indeterminate\n    description:str='Processing', # Description text for the progress bar\n    verbose:bool=False, # If True, prints detailed ffmpeg output\n    progress_callback:Optional=None, # Optional callback receiving current progress in seconds\n)-&gt;None: # Raises FileNotFoundError or subprocess.CalledProcessError on failure\n\nRun an ffmpeg command with a progress bar.\n\n\n\nparse_progress_line\n\ndef parse_progress_line(\n    line:str, # A line of stderr output from ffmpeg\n)-&gt;Optional: # Current time in seconds, or None if the line has no progress info\n\nParse a progress line from ffmpeg stderr output.\n\nassert parse_progress_line(\"out_time_ms=1000000\") == 1.0\nassert parse_progress_line(\"time=00:00:02.50\") == 2.5\nassert parse_progress_line(\"frame=10\") is None\nassert parse_progress_line(\"garbage\") is None\nprint(\"progress parsing OK\")",
+    "crumbs": [
+      "utils",
+      "FFmpeg Execution + Progress"
+    ]
+  },
+  {
+    "objectID": "capability.html#configuration",
+    "href": "capability.html#configuration",
+    "title": "FFmpeg Processing Capability",
+    "section": "Configuration",
+    "text": "Configuration\n\n\nFFmpegCapabilityConfig\n\ndef FFmpegCapabilityConfig(\n    default_audio_format:str='mp3', default_audio_bitrate:str='192k', prefer_stream_copy:bool=True,\n    resampler:str='soxr'\n)-&gt;None:\n\nConfiguration for the FFmpeg processing tool (the HOW knobs only).\nPer-call WHAT-to-produce params (output_format / sample_rate / channels / boundaries) are method arguments the adapter hashes into the cache key, NOT config — only the quality/engine knobs live here. (The fused-era output_dir config field is gone: the adapter chooses the output location, stage-8 L6.)\n\nschema = dataclass_to_jsonschema(FFmpegCapabilityConfig)\nassert \"properties\" in schema\nassert \"default_audio_format\" in schema[\"properties\"]\nassert schema[\"properties\"][\"default_audio_format\"][\"default\"] == \"mp3\"\nprint(f\"Config schema: {list(schema['properties'].keys())}\")\n\nConfig schema: ['output_dir', 'default_audio_format', 'default_audio_bitrate', 'prefer_stream_copy']",
+    "crumbs": [
+      "FFmpeg Processing Capability"
+    ]
+  },
+  {
+    "objectID": "capability.html#capability-class",
+    "href": "capability.html#capability-class",
+    "title": "FFmpeg Processing Capability",
+    "section": "Capability Class",
+    "text": "Capability Class\n\n\nFFmpegProcessingCapability\n\ndef FFmpegProcessingCapability(\n    \n):\n\nFFmpeg-based media-processing tool capability (stage 8: pure compute).\nNative-surface model (PILLAR 1c): PURE COMPUTE. The artifact ops (convert/segment_audio/extract_audio) read input, run ffmpeg, and WRITE file(s) into the adapter-supplied output_dir, returning typed DTOs; get_info probes and returns MediaMetadata. The cache-check + output-location choice + persistence live in the generic media-processing adapter (cjm-media-processing-adapter-interface); result DTOs live in cjm-capability-primitives; identity derives from the installed distribution. No get_plugin_metadata, no self.storage, no in-tool cache, no execute/@capability_action dispatcher (the task channel routes by method).\nConfig = the HOW knobs (resampler engine, bitrate, stream-copy preference, fallback format); the per-call output_format/sample_rate/channels/boundaries are WHAT-to-produce request params the adapter hashes into the cache key. The fused-era extract_segment action was DROPPED (no consumer; the HITL audio-chunk read is a future in-memory op, a different shape).\n\ncapability = FFmpegProcessingCapability()\n# `name` derives from importlib.metadata and is unrunnable in the notebook __main__\n# cell (__package__ is None) — asserted at manifest-gen / e2e (the silero/Demucs\n# precedent). Here: version + availability + the native surface.\nassert isinstance(capability.version, str) and capability.version\nassert capability.is_available() == FFMPEG_AVAILABLE\nprint(f\"FFmpeg tool v{capability.version}; available: {capability.is_available()}\")\n\n\ncapability.initialize({})\nassert capability.config is not None\nassert capability.config.default_audio_format == \"mp3\"\nassert capability.config.prefer_stream_copy is True\nassert capability.config.resampler == \"soxr\"\n# No self.storage anymore — the adapter owns the cache (stage 8).\nassert not hasattr(capability, \"storage\")\nprint(f\"Config: format={capability.config.default_audio_format}, bitrate={capability.config.default_audio_bitrate}, resampler={capability.config.resampler}\")\nprint(f\"Current config: {capability.get_current_config()}\")\n\n\ncapability.initialize({\"default_audio_format\": \"wav\", \"default_audio_bitrate\": \"320k\", \"resampler\": \"swr\"})\nassert capability.config.default_audio_format == \"wav\"\nassert capability.config.default_audio_bitrate == \"320k\"\nassert capability.config.resampler == \"swr\"\nprint(f\"Custom config: {capability.get_current_config()}\")\n\n\nschema = capability.get_config_schema()\nassert \"properties\" in schema\nprops = schema[\"properties\"]\n# The fused-era `output_dir` config field is GONE (the adapter chooses output location).\nassert \"output_dir\" not in props\nassert \"default_audio_format\" in props\nassert \"default_audio_bitrate\" in props\nassert \"prefer_stream_copy\" in props\nassert \"resampler\" in props\nprint(f\"Schema properties: {list(props.keys())}\")\n\n\n# Self-contained instance (avoid cross-cell state for nbdev-readme/quarto parallel exec)\ncapability = FFmpegProcessingCapability()\n# Native-surface assertion: the pure-compute tool exposes the media-processing\n# methods + get_current_config (the MediaProcessingToolProtocol surface) and NO\n# fused-era execute/@capability_action dispatcher or supported_actions.\nfor m in (\"convert\", \"segment_audio\", \"extract_audio\", \"get_info\", \"get_current_config\"):\n    assert callable(getattr(capability, m, None)), f\"missing native method {m}\"\nassert not hasattr(capability, \"supported_actions\"), \"fused-era action dispatcher must be gone\"\n# extract_segment was dropped (no consumer; future HITL read is a distinct in-memory op).\nassert not hasattr(capability, \"extract_segment\")\nimport inspect\nassert \"output_dir\" in inspect.signature(capability.convert).parameters\nprint(\"Native media-processing surface OK (convert/segment_audio/extract_audio/get_info; no execute/extract_segment)\")\n\nNative media-processing surface OK (convert/segment_audio/extract_audio/get_info; no execute/extract_segment)",
+    "crumbs": [
+      "FFmpeg Processing Capability"
+    ]
+  },
+  {
+    "objectID": "utils/segments.html",
+    "href": "utils/segments.html",
+    "title": "Audio Segment Extraction",
+    "section": "",
+    "text": "extract_audio_segment\n\ndef extract_audio_segment(\n    input_path:Path, # Path to the input audio file\n    output_path:Path, # Path where the extracted segment is saved\n    start_time:str, # Start time as \"HH:MM:SS\" or seconds\n    duration:str, # Duration as \"HH:MM:SS\" or seconds\n    verbose:bool=False, # If True, shows verbose ffmpeg output\n    pbar:bool=False, # If True, shows a progress bar\n    copy_codec:bool=True, # Stream-copy without re-encoding (fast)\n)-&gt;None: # Raises subprocess.CalledProcessError if extraction fails\n\nExtract a temporal segment from an audio file.\n\nassert callable(extract_audio_segment)\nprint(\"extract_audio_segment importable\")",
+    "crumbs": [
+      "utils",
+      "Audio Segment Extraction"
+    ]
+  },
+  {
+    "objectID": "utils/probe.html",
+    "href": "utils/probe.html",
+    "title": "Media Probing",
+    "section": "",
+    "text": "get_media_duration\n\ndef get_media_duration(\n    file_path:Path, # Path to the media file\n)-&gt;Optional: # Duration in seconds, or None if it cannot be determined\n\nGet the duration of a media file (seconds) via ffprobe.\n\n# Non-existent file -&gt; None (ffprobe fails, swallowed)\nassert get_media_duration(Path(\"/nonexistent/file.mp3\")) is None\nprint(\"probe OK\")",
+    "crumbs": [
+      "utils",
+      "Media Probing"
+    ]
+  },
+  {
+    "objectID": "utils/codec.html",
+    "href": "utils/codec.html",
+    "title": "Audio Codec Map",
+    "section": "",
+    "text": "get_audio_codec\n\ndef get_audio_codec(\n    audio_format:str, # The desired audio format (e.g. 'mp3', 'wav')\n)-&gt;str: # The ffmpeg audio codec name ('copy' if unknown)\n\nMap an audio container format to the appropriate ffmpeg codec.\n\nassert get_audio_codec(\"mp3\") == \"libmp3lame\"\nassert get_audio_codec(\"WAV\") == \"pcm_s16le\"\nassert get_audio_codec(\"unknown-format\") == \"copy\"\nprint(\"codec map OK\")",
+    "crumbs": [
+      "utils",
+      "Audio Codec Map"
+    ]
+  }
+]
