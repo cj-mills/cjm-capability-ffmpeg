@@ -1,9 +1,0 @@
-project:
-  output-dir: _docs
-
-website:
-  title: "cjm-capability-ffmpeg"
-  site-url: "https://cj-mills.github.io/cjm-capability-ffmpeg"
-  description: "An FFmpeg-based media-processing capability for the cjm-substrate runtime that provides audio extraction, segmentation, and format conversion."
-  repo-branch: main
-  repo-url: "https://github.com/cj-mills/cjm-capability-ffmpeg"
