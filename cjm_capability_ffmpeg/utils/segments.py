@@ -37,11 +37,23 @@ def extract_audio_segment(input_path: Path,  # Path to the input media file (aud
         else:
             segment_duration = None
 
-    # Place -ss before -i for fast input seeking (seeks to the nearest keyframe).
+    # Two-stage seek. Input-side -ss (before -i) is the FAST seek: on a cluster-indexed
+    # container (WebM/Matroska, MP4) it lands on the nearest cluster AT OR BEFORE the target,
+    # and under stream copy every packet from there to the target is KEPT with a negative
+    # timestamp — up to a cluster (~5 s) of audio before the requested start. The MP4 muxer
+    # hides that behind an edit list; the Ogg muxer writes negative granule positions
+    # ("Unsupported huge granule pos -192120") and ffmpeg-based readers (demucs, whisper,
+    # torchaudio) decode ZERO samples while ffprobe still reports the full duration
+    # (2026-09-10: demucs died on a bare assert over such a cut). `-avoid_negative_ts`
+    # only relabels those packets — the segment would still start early against the spine.
+    # The output-side `-ss 0` DROPS every packet before the (rebased) target, so the cut is
+    # packet-accurate from `start_time` in any container, still without a decode: the real
+    # 4K lecture cuts in 0.06 s and decodes to the requested length.
     cmd = [
         'ffmpeg',
         '-ss', start_time,
         '-i', str(input_path),
+        '-ss', '0',
         '-t', duration,
         '-vn',
     ]

@@ -58,6 +58,37 @@ def test_extract_audio_segment_round_trip(tmp_path):
     assert dur is not None and 0.8 <= dur <= 1.2
 
 
+def _has_encoder(name):  # -> whether this ffmpeg build carries the named encoder
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
+    return f" {name} " in out.stdout
+
+
+def decoded_seconds(path, rate=48000):  # -> seconds of audio a DECODE yields (ffprobe's declared duration can lie)
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le", "-ar", str(rate), "-ac", "1", "-"],
+                         capture_output=True)
+    assert out.returncode == 0 and not out.stderr.strip(), out.stderr.decode()   # a damaged Ogg logs "huge granule pos" here
+    return len(out.stdout) / (rate * 2)
+
+
+@pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg binary not on PATH")
+@pytest.mark.parametrize("container", ["webm", "mp4"])
+def test_extract_audio_segment_mid_file_cut_from_a_cluster_indexed_container_is_exact(tmp_path, container):
+    # 2026-09-10: a stream-copied Opus cut of a WebM lecture that started mid-file kept up to
+    # a cluster of audio from BEFORE the target with negative timestamps; the Ogg muxer wrote
+    # negative granule positions, ffprobe reported the requested duration, and a decode
+    # yielded ZERO samples (demucs died on a bare assert). The two-stage seek drops those
+    # packets: the cut decodes to the requested length and starts at the requested time.
+    codec, ext = ("libopus", "ogg") if container == "webm" else ("aac", "m4a")
+    if not _has_encoder(codec):
+        pytest.skip(f"ffmpeg build lacks {codec}")
+    src = tmp_path / f"tone.{container}"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=12",
+                    "-c:a", codec, str(src)], check=True)
+    out = tmp_path / f"cut.{ext}"
+    extract_audio_segment(src, out, start_time="7.0", duration="3.0")
+    assert 2.8 <= decoded_seconds(out) <= 3.2
+
+
 @pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg binary not on PATH")
 def test_extract_audio_segment_drops_video_stream(tmp_path):
     # finding 63861c91: a VIDEO input must yield an AUDIO-ONLY segment — the
