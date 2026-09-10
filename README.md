@@ -11,7 +11,7 @@ An FFmpeg-based media-processing capability for the cjm-substrate runtime that p
 - **`cjm_capability_ffmpeg.utils.codec`** — Map audio container formats to the ffmpeg codec used to encode them.
 - **`cjm_capability_ffmpeg.utils.probe`** — Probe media files for metadata (duration, ...) via ffprobe.
 - **`cjm_capability_ffmpeg.utils.progress`** — Run ffmpeg subprocess commands with a progress bar and optional callback.
-- **`cjm_capability_ffmpeg.utils.segments`** — Extract temporal segments from audio files via ffmpeg stream-copy.
+- **`cjm_capability_ffmpeg.utils.segments`** — Extract temporal AUDIO segments from media files via ffmpeg stream-copy — audio-only by contract (`-vn`): a video input yields an audio segment, never a re-encoded video clip.
 
 ## API
 

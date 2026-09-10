@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from cjm_capability_ffmpeg.utils.availability import FFMPEG_AVAILABLE
-from cjm_capability_ffmpeg.utils.codec import get_audio_codec
+from cjm_capability_ffmpeg.utils.codec import (AUDIO_ONLY_SUFFIXES, get_audio_codec,
+                                               get_audio_extension)
 from cjm_capability_ffmpeg.utils.probe import get_media_duration
 from cjm_capability_ffmpeg.utils.progress import run_ffmpeg_with_progress
 from cjm_capability_ffmpeg.utils.segments import extract_audio_segment
@@ -270,14 +271,23 @@ class FFmpegProcessingCapability(ToolCapability):
         })
 
     def segment_audio(self,
-                      input_path: Union[str, Path],         # Source audio to cut
+                      input_path: Union[str, Path],         # Source media to cut (audio or video container)
                       output_dir: str,                      # Adapter-chosen dir to write the segments into
                       boundaries: List[Dict[str, float]],   # [{"start", "end"}, ...]
-                      output_format: Optional[str] = None,  # Output format (default: same as input)
+                      output_format: Optional[str] = None,  # Output format (default: audio-only container of the source codec)
                       filename_template: str = "segment_{index:03d}",  # Per-segment filename pattern
                       **kwargs                              # Provenance pass-through (unused by compute)
                      ) -> MediaSegmentationResult:  # The produced batch of segment files
-        """Split an audio file into segments at the given boundaries — PURE COMPUTE.
+        """Split a media file's AUDIO into segments at the given boundaries — PURE COMPUTE.
+
+        Audio-only by contract: every segment drops the video stream (`-vn`) and
+        stream-copies the audio track. When `output_format` is not given, the
+        extension is the input's own for an audio-only container, otherwise the
+        audio-only container that holds the detected codec (opus -> ogg, aac ->
+        m4a, ...), never the video container — cutting a VP9 lecture recording
+        used to re-encode the video per segment at ~10 min each (finding
+        63861c91). An unmapped codec falls back to `default_audio_format` with a
+        re-encode.
 
         Writes one file per boundary into `output_dir` and returns the typed batch
         result. Batch-level caching is the adapter's concern (one row per
@@ -305,7 +315,7 @@ class FFmpegProcessingCapability(ToolCapability):
                     fields_invalid=["boundaries"],
                 )
 
-        ext = output_format or Path(input_path).suffix.lstrip('.')
+        ext, stream_copy, source_codec = self._resolve_segment_format(input_path, output_format)
         os.makedirs(output_dir, exist_ok=True)
         batch_key = str(uuid.uuid4())
         total = len(boundaries)
@@ -322,6 +332,7 @@ class FFmpegProcessingCapability(ToolCapability):
                 output_path=Path(output_path),
                 start_time=str(start),
                 duration=str(duration),
+                copy_codec=stream_copy,
             )
             segments.append(MediaSegment(
                 index=i, output_path=output_path, start=start, end=end, duration=duration,
@@ -330,12 +341,39 @@ class FFmpegProcessingCapability(ToolCapability):
 
         total_duration = sum(s.duration for s in segments)
         self.report_progress(1.0, f"Complete: {total} segments")
-        self.logger.info(f"Segmented {input_path} into {total} segments (batch_key={batch_key})")
+        self.logger.info(
+            f"Segmented {input_path} into {total} audio-only .{ext} segments "
+            f"(codec={source_codec}, stream_copy={stream_copy}, batch_key={batch_key})"
+        )
 
         return MediaSegmentationResult(
             segments=segments, input_path=input_path, segment_count=total,
             total_duration=total_duration, batch_key=batch_key,
         )
+
+    def _resolve_segment_format(self,
+                                input_path: str,                # Source media path
+                                output_format: Optional[str],   # Caller-requested extension, or None
+                               ) -> "tuple[str, bool, Optional[str]]":  # (extension, stream_copy, detected codec)
+        """Pick the AUDIO-ONLY container + copy/encode mode for `segment_audio`.
+
+        Explicit `output_format`: honoured; stream-copy only when its codec map
+        says 'copy' or matches the detected codec, else re-encode. Otherwise an
+        audio-only input keeps its extension under stream copy; a video (or
+        unknown) container maps the detected codec to its audio-only holder
+        (`get_audio_extension`); an unmapped codec re-encodes to
+        `default_audio_format`."""
+        suffix = Path(input_path).suffix.lstrip('.').lower()
+        codec = self._detect_audio_codec(input_path)
+        if output_format:
+            expected = get_audio_codec(output_format)
+            return output_format, (expected == 'copy' or expected == codec), codec
+        if suffix in AUDIO_ONLY_SUFFIXES:
+            return suffix, True, codec
+        mapped = get_audio_extension(codec)
+        if mapped:
+            return mapped, True, codec
+        return self.config.default_audio_format, False, codec
 
     def extract_audio(self,
                       input_path: Union[str, Path],         # Source video container
@@ -361,12 +399,9 @@ class FFmpegProcessingCapability(ToolCapability):
 
         stream_copy = self.config.prefer_stream_copy
         if output_format is None:
-            codec_ext_map = {
-                'aac': 'm4a', 'mp3': 'mp3', 'vorbis': 'ogg', 'opus': 'ogg',
-                'flac': 'flac', 'pcm_s16le': 'wav', 'pcm_s24le': 'wav',
-            }
-            output_format = codec_ext_map.get(codec, self.config.default_audio_format)
-            if codec not in codec_ext_map:
+            mapped = get_audio_extension(codec)
+            output_format = mapped or self.config.default_audio_format
+            if not mapped:
                 stream_copy = False
         else:
             expected_codec = get_audio_codec(output_format)

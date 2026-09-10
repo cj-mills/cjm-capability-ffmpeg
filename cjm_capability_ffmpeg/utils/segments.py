@@ -1,4 +1,6 @@
-"""Extract temporal segments from audio files via ffmpeg stream-copy."""
+"""Extract temporal AUDIO segments from media files via ffmpeg stream-copy —
+audio-only by contract (`-vn`): a video input yields an audio segment, never a
+re-encoded video clip."""
 
 import subprocess
 from pathlib import Path
@@ -6,15 +8,22 @@ from pathlib import Path
 from cjm_capability_ffmpeg.utils.progress import run_ffmpeg_with_progress
 
 
-def extract_audio_segment(input_path: Path,  # Path to the input audio file
-                          output_path: Path,  # Path where the extracted segment is saved
+def extract_audio_segment(input_path: Path,  # Path to the input media file (audio or video container)
+                          output_path: Path,  # Path where the extracted audio segment is saved
                           start_time: str,  # Start time as "HH:MM:SS" or seconds
                           duration: str,  # Duration as "HH:MM:SS" or seconds
                           verbose: bool = False,  # If True, shows verbose ffmpeg output
                           pbar: bool = False,  # If True, shows a progress bar
                           copy_codec: bool = True,  # Stream-copy without re-encoding (fast)
                         ) -> None:  # Raises subprocess.CalledProcessError if extraction fails
-    """Extract a temporal segment from an audio file."""
+    """Extract a temporal audio segment from a media file.
+
+    Always drops the video stream (`-vn`): before this guard, a video input was
+    cut with its video track re-encoded in software (VP9 via libvpx at well
+    under real time), which is what made per-segment cuts of lecture recordings
+    take ~10 minutes each (finding 63861c91). The output container must be an
+    audio-only one that can hold the copied codec (see
+    `cjm_capability_ffmpeg.utils.codec.get_audio_extension`)."""
     # Compute the expected segment duration for the progress bar.
     try:
         segment_duration = float(duration)
@@ -34,6 +43,7 @@ def extract_audio_segment(input_path: Path,  # Path to the input audio file
         '-ss', start_time,
         '-i', str(input_path),
         '-t', duration,
+        '-vn',
     ]
     if copy_codec:
         cmd.extend(['-acodec', 'copy'])
