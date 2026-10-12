@@ -3,11 +3,11 @@
 Projected from the four utils notebooks' test cells; the segments check is
 upgraded from the notebook's bare `callable` assert to a real stream-copy
 round-trip on a generated tone (ffmpeg-on-PATH gated, no network)."""
+
 import subprocess
 from pathlib import Path
 
 import pytest
-
 from cjm_capability_ffmpeg.utils.availability import FFMPEG_AVAILABLE
 from cjm_capability_ffmpeg.utils.codec import get_audio_codec, get_audio_extension
 from cjm_capability_ffmpeg.utils.probe import get_media_duration

@@ -3,13 +3,12 @@
 Projected from the capability notebook's five test cells: config schema,
 identity/availability, initialize defaults + reconfigure, the stage-8 native
 media-processing surface (no fused-era dispatcher), and the gone-field guards."""
+
 import inspect
 import subprocess
 
 import pytest
-
-from cjm_capability_ffmpeg.capability import (FFmpegCapabilityConfig,
-                                              FFmpegProcessingCapability)
+from cjm_capability_ffmpeg.capability import FFmpegCapabilityConfig, FFmpegProcessingCapability
 from cjm_capability_ffmpeg.utils.availability import FFMPEG_AVAILABLE
 from cjm_capability_ffmpeg.utils.probe import get_media_duration
 from cjm_substrate.utils.validation import dataclass_to_jsonschema
