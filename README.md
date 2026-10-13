@@ -6,12 +6,14 @@ An FFmpeg-based media-processing capability for the cjm-substrate runtime that p
 
 ## Modules
 
+- **`cjm_capability_ffmpeg.__init__`**
 - **`cjm_capability_ffmpeg.capability`** — FFmpeg-based media processing capability implementing the MediaProcessingCapability interface.
+- **`cjm_capability_ffmpeg.utils.__init__`**
 - **`cjm_capability_ffmpeg.utils.availability`** — Detect whether the ffmpeg binary is installed on this system.
-- **`cjm_capability_ffmpeg.utils.codec`** — Map audio container formats to the ffmpeg codec used to encode them.
+- **`cjm_capability_ffmpeg.utils.codec`** — Map audio container formats to the ffmpeg codec used to encode them, and
 - **`cjm_capability_ffmpeg.utils.probe`** — Probe media files for metadata (duration, ...) via ffprobe.
 - **`cjm_capability_ffmpeg.utils.progress`** — Run ffmpeg subprocess commands with a progress bar and optional callback.
-- **`cjm_capability_ffmpeg.utils.segments`** — Extract temporal AUDIO segments from media files via ffmpeg stream-copy — audio-only by contract (`-vn`): a video input yields an audio segment, never a re-encoded video clip.
+- **`cjm_capability_ffmpeg.utils.segments`** — Extract temporal AUDIO segments from media files via ffmpeg stream-copy —
 
 ## API
 
@@ -23,6 +25,7 @@ An FFmpeg-based media-processing capability for the cjm-substrate runtime that p
 ### `cjm_capability_ffmpeg.utils.codec`
 
 - `get_audio_codec` _function_ — Map an audio container format to the appropriate ffmpeg codec.
+- `get_audio_extension` _function_ — Map a detected audio codec to the audio-only container that stream-copies it.
 
 ### `cjm_capability_ffmpeg.utils.probe`
 
@@ -35,4 +38,8 @@ An FFmpeg-based media-processing capability for the cjm-substrate runtime that p
 
 ### `cjm_capability_ffmpeg.utils.segments`
 
-- `extract_audio_segment` _function_ — Extract a temporal segment from an audio file.
+- `extract_audio_segment` _function_ — Extract a temporal audio segment from a media file.
+
+## Dependencies
+
+**Depends on:** `cjm-capability-primitives`, `cjm-substrate`, `tqdm`
